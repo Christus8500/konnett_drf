@@ -41,6 +41,12 @@ class ProviderProfile(models.Model):
 
     completed_jobs = models.PositiveIntegerField(
         default=0
+    )    
+
+    profile_image = models.ImageField(
+        upload_to="providers/profile_images/",
+        blank=True,
+        null=True
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

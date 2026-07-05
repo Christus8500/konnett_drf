@@ -20,12 +20,6 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel, UUIDModel):
         default=UserRole.CUSTOMER
     )
 
-    profile_image = models.ImageField(
-        upload_to="accounts/profiles/",
-        blank=True,
-        null=True
-    )
-
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
 

@@ -1,0 +1,42 @@
+@baseUrl = http://localhost:8000
+@accessToken = paste_access_token_here
+@refreshToken = paste_refresh_token_here
+
+###
+# Register
+POST {{baseUrl}}/api/accounts/register/
+Content-Type: application/json
+
+{
+    "email": "johndoe@example.com",
+    "phone_number": "09056659000",
+    "password": "Johndoe123!",
+    "confirm_password": "Johndoe123!",
+    "first_name": "John",
+    "last_name": "Doe",
+    "role": "customer"
+}
+
+###
+# Login
+POST {{baseUrl}}/api/accounts/login/
+Content-Type: application/json
+
+{
+    "email": "johndoe@example.com",
+    "password": "Johndoe123!"
+}
+
+###
+# Me
+GET {{baseUrl}}/api/accounts/me/
+Authorization: Bearer {{accessToken}}
+
+###
+# Refresh Token
+POST {{baseUrl}}/api/accounts/token/refresh/
+Content-Type: application/json
+
+{
+    "refresh": "{{refreshToken}}"
+}

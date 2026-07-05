@@ -32,7 +32,13 @@ class CustomerProfile(models.Model):
         blank=True
     )
 
+    profile_image = models.ImageField(
+        upload_to="customers/profile_images/",
+        blank=True,
+        null=True
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return self.user.username
+        return f'{self.user.first_name} - {self.user.email}'

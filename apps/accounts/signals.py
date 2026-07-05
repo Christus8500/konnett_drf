@@ -17,5 +17,5 @@ def create_user_profile(sender, instance, created, **kwargs):
     elif instance.role == "provider":
         ProviderProfile.objects.create(
             user=instance,
-            business_name=instance.email.split("@")[0]
+            business_name=f'{instance.first_name} {instance.last_name}'
         )
