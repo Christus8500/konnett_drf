@@ -1,0 +1,44 @@
+@baseUrl = http://localhost:8000
+@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzgzNTAxMTU4LCJpYXQiOjE3ODM0OTkzNTgsImp0aSI6ImQzYWJkMGJiOWU4NDQ2MjhiZTI3MzYwYTQ2MzZmOGMwIiwidXNlcl9pZCI6IjUwOWJlNDAyLTA1NTgtNDAwZS05NDNmLTc0ZTgyYmY1YzY2ZSJ9.XUVujP3ZWEJvQG3DzIh5worrZzaoil8sNaNX20dK6A0
+@refreshToken = paste_refresh_token_here
+
+###
+# Login
+POST {{baseUrl}}/api/accounts/login/
+Content-Type: application/json
+
+{
+    "email": "johndoe@example.com",
+    "password": "Johndoe123!"
+}
+
+
+###
+# Refresh Token
+POST {{baseUrl}}/api/accounts/token/refresh/
+Content-Type: application/json
+
+{
+    "refresh": "{{refreshToken}}"
+}
+
+
+###
+# Get Customer Profile 
+#The lookup field and kwarg is the customer's user_id
+GET {{baseUrl}}/api/customers/profile/509be402-0558-400e-943f-74e82bf5c66e/
+Authorization: Bearer {{accessToken}}
+
+###
+# Update Customer Profile
+# Can also update: Phone_no, first_name and last_name
+PATCH {{baseUrl}}/api/customers/profile/509be402-0558-400e-943f-74e82bf5c66e/
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+    "address": "25 Zik's Avenue",
+    "city": "Awka",
+    "state": "Anambra",
+    "first_name": "John"
+}

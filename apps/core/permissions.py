@@ -16,6 +16,17 @@ class IsOwnerOrAdmin(BasePermission):
         return obj.user == request.user
 
 
+class IsOwner(BasePermission):
+    """
+    Allows access only to object owners.
+    """
+
+    def has_object_permission(self, request, view, obj):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        return obj.user == request.user
+
+
 class IsAdmin(BasePermission):
     """
     Allows access only to admin users.
