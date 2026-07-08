@@ -48,6 +48,7 @@ class RegisterSerializer(serializers.ModelSerializer):
             )
         return attrs
     
+    #Extracting password and confirm_password from validated_data, creating a new user instance, setting the password, and saving the user to the database. Finally, returning the created user instance.
     def create(self, validated_data):
         validated_data.pop("confirm_password")
         password = validated_data.pop("password")
@@ -66,6 +67,7 @@ class LoginSerializer(serializers.Serializer):
         style={"input_type": "password"},
     )
 
+    #Overriding validate() to authenticate the user using the provided email and password. If authentication fails, a validation error is raised. If successful, the authenticated user is added to the validated data.
     def validate(self, attrs):
         email = attrs.get("email")
         password = attrs.get("password")

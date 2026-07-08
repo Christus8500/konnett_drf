@@ -10,6 +10,7 @@ from apps.accounts.serializers import RegisterSerializer, LoginSerializer, UserS
 from apps.accounts.models import User
 
 # Create your views here.
+#UserViewSet: A viewset that allows listing, retrieving, updating, and deleting user instances. Only accessible by admin users.
 class UserViewSet(
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
@@ -22,10 +23,12 @@ class UserViewSet(
     permission_classes = [IsAdminUser]
 
 
+#RegisterView: A view for handling user registration requests. Only accessible by any user.
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
 
+    #Overriding create() to handle user registration. It validates the incoming data, creates a new user instance, generates JWT tokens for the user, and returns a response with the created user's data and tokens.
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -44,9 +47,11 @@ class RegisterView(generics.CreateAPIView):
         )
     
 
+#LoginView: A view for handling user login requests. Only accessible by any user.
 class LoginView(APIView):
     permission_classes = [AllowAny]
     
+    #Overriding post() to handle user login. It validates the incoming data, authenticates the user, generates JWT tokens for the authenticated user, and returns a response with the user's data and tokens.
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -65,6 +70,7 @@ class LoginView(APIView):
         )
     
     
+#UserView: A view for retrieving the currently authenticated user's information. Only accessible by authenticated users.
 class UserView(generics.RetrieveAPIView):
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]

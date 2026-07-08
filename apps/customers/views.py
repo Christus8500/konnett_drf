@@ -19,6 +19,7 @@ class CustomerDetailView(generics.RetrieveUpdateAPIView):
     #Allow only fetch and update
     http_method_names = ["get", "patch"]
 
+    #Overriding get_permissions(): Admin can fetch any customer profile, but only the owner can update their own profile.
     def get_permissions(self):
         self.permission_classes = [IsOwnerOrAdmin]
         if self.request.method == 'PATCH':

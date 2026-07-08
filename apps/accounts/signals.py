@@ -6,6 +6,7 @@ from apps.customers.models import CustomerProfile
 from apps.providers.models import ProviderProfile
 
 
+#Creating user profiles based on the role of the user after a new user instance is created. If the user is a customer, a CustomerProfile is created. If the user is a provider, a ProviderProfile is created with the business name set to the user's full name.
 @receiver(post_save, sender=User)
 def create_user_profile(sender, instance, created, **kwargs):
     if not created:

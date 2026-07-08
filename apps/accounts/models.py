@@ -23,7 +23,9 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel, UUIDModel):
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
 
+    #Custom user manager for handling user creation and superuser creation
     objects = UserManager()
+    
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = ["first_name", "last_name"]
 

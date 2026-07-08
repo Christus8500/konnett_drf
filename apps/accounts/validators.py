@@ -2,6 +2,7 @@ import re
 from rest_framework import serializers
 
 
+#Validating password strength based on length, uppercase, lowercase, number, and special character requirements.
 def validate_password(password):
     if len(password) < 8:
         raise serializers.ValidationError(
