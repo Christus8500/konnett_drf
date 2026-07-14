@@ -2,7 +2,8 @@ from django.core.exceptions import ValidationError
 
 MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5MB
 
-def validate_image(self, image):
+def validate_image(image):
+    print("Validator called:", image)
     allowed = ["image/jpeg", "image/png"]
 
     if image.content_type not in allowed:

@@ -32,7 +32,7 @@ class CustomerProfileSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "user_id", "created_at", "updated_at"]
 
     #Overriding the serializer update method
-    #So the serializer will know how to update values on the "User" table
+    #So the serializer will know how to update the values on the "User" table
     def update(self, instance, validated_data):
         user_data = validated_data.pop("user", {})
 

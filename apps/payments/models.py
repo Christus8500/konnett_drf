@@ -2,57 +2,53 @@ import uuid
 from django.db import models
 
 # Create your models here.
-# payments/models.py
 
-import uuid
-from django.db import models
+# class Payment(models.Model):
 
+#     STATUS_CHOICES = (
+#         ("pending", "Pending"),
+#         ("held", "Held"),
+#         ("released", "Released"),
+#         ("refunded", "Refunded"),
+#     )
 
-class Payment(models.Model):
+#     id = models.UUIDField(
+#         primary_key=True,
+#         default=uuid.uuid4,
+#         editable=False
+#     )
 
-    STATUS_CHOICES = (
-        ("pending", "Pending"),
-        ("held", "Held"),
-        ("released", "Released"),
-        ("refunded", "Refunded"),
-    )
+#     request = models.OneToOneField(
+#         "jobs.ServiceRequest",
+#         on_delete=models.CASCADE
+#     )
 
-    id = models.UUIDField(
-        primary_key=True,
-        default=uuid.uuid4,
-        editable=False
-    )
+#     amount = models.DecimalField(
+#         max_digits=12,
+#         decimal_places=2
+#     )
 
-    request = models.OneToOneField(
-        "jobs.ServiceRequest",
-        on_delete=models.CASCADE
-    )
+#     platform_fee = models.DecimalField(
+#         max_digits=12,
+#         decimal_places=2,
+#         default=0
+#     )
 
-    amount = models.DecimalField(
-        max_digits=12,
-        decimal_places=2
-    )
+#     provider_amount = models.DecimalField(
+#         max_digits=12,
+#         decimal_places=2
+#     )
 
-    platform_fee = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        default=0
-    )
+#     transaction_reference = models.CharField(
+#         max_length=255,
+#         unique=True
+#     )
 
-    provider_amount = models.DecimalField(
-        max_digits=12,
-        decimal_places=2
-    )
+#     status = models.CharField(
+#         max_length=20,
+#         choices=STATUS_CHOICES,
+#         default="pending"
+#     )
 
-    transaction_reference = models.CharField(
-        max_length=255,
-        unique=True
-    )
+#     created_at = models.DateTimeField(auto_now_add=True)
 
-    status = models.CharField(
-        max_length=20,
-        choices=STATUS_CHOICES,
-        default="pending"
-    )
-
-    created_at = models.DateTimeField(auto_now_add=True)

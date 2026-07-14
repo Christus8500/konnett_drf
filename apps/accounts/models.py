@@ -1,10 +1,10 @@
-import uuid
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 
 from apps.accounts.managers import UserManager
 from apps.core.models import TimeStampedModel, UUIDModel
 from apps.core.choices import UserRole
+
 
 # Create your models here.
 

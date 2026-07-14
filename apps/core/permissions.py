@@ -60,3 +60,4 @@ class IsProvider(BasePermission):
             and request.user.is_authenticated
             and request.user.role == "provider"
         )
+    

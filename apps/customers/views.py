@@ -1,14 +1,12 @@
-from django.shortcuts import render
-
 from rest_framework import generics
 
 from apps.core.permissions import IsOwner, IsOwnerOrAdmin
 from apps.customers.models import CustomerProfile
-from  apps.customers.serializers import CustomerProfileSerializer
+from apps.customers.serializers import CustomerProfileSerializer
 
 
 # Create your views here.
-class CustomerDetailView(generics.RetrieveUpdateAPIView):
+class CustomerProfileView(generics.RetrieveUpdateAPIView):
     queryset = CustomerProfile.objects.select_related('user')
     serializer_class = CustomerProfileSerializer
     
