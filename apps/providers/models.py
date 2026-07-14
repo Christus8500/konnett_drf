@@ -17,6 +17,7 @@ def profile_image_upload(instance, filename):
     return f"providers/profile_images/{instance.id}/{filename}"
 
 
+# ProviderProfile: A model representing the profile of a provider, linked to a user instance.
 class ProviderProfile(UUIDModel, TimeStampedModel):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="provider_profile")
 
@@ -37,6 +38,7 @@ class ProviderProfile(UUIDModel, TimeStampedModel):
         return self.business_name
     
 
+# ProviderVerification: A model representing the verification status of a provider, linked to a ProviderProfile instance.
 class ProviderVerification(UUIDModel):
     provider = models.OneToOneField(ProviderProfile, on_delete=models.CASCADE)
     id_document = models.FileField(upload_to=kyc_image_upload, blank=True, null=True)
@@ -48,6 +50,7 @@ class ProviderVerification(UUIDModel):
     )
     submitted_at = models.DateTimeField(blank=True, null=True)
 
+    # Override the save method to set the submitted_at field when either document is uploaded for the first time.
     def save(self, *args, **kwargs):
         # Set submitted_at the first time either document is uploaded
         if not self.submitted_at and (self.id_document or self.selfie_image):

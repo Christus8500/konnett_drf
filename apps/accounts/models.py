@@ -8,6 +8,7 @@ from apps.core.choices import UserRole
 
 # Create your models here.
 
+# User: A custom user model extending AbstractBaseUser and PermissionsMixin, representing a user in the system.
 class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel, UUIDModel):
     email = models.EmailField(unique=True)
     phone_number = models.CharField(max_length=20, blank=True)
@@ -26,6 +27,7 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel, UUIDModel):
     #Custom user manager for handling user creation and superuser creation
     objects = UserManager()
     
+    # The field used for authentication is the email field, and the required fields for creating a user are first_name and last_name.
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = ["first_name", "last_name"]
 

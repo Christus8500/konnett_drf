@@ -10,6 +10,8 @@ from apps.providers.serializers import ProviderProfileSerializer, ProviderVerifi
 from apps.providers.permissions import IsProviderVerificationOwner
 
 # Create your views here.
+
+# View for retrieving and updating the ProviderProfile instance associated with a specific user.
 class ProviderProfileView(generics.RetrieveUpdateAPIView):
     queryset = ProviderProfile.objects.select_related('user')
     serializer_class = ProviderProfileSerializer
@@ -29,6 +31,7 @@ class ProviderProfileView(generics.RetrieveUpdateAPIView):
         return super().get_permissions()
     
 
+# View for retrieving and updating the ProviderVerification instance associated with a specific provider.
 class ProviderVerificationView(generics.RetrieveUpdateAPIView):
     queryset = ProviderVerification.objects.select_related("provider", "provider__user")
     serializer_class = ProviderVerificationSerializer
@@ -48,6 +51,7 @@ class ProviderVerificationView(generics.RetrieveUpdateAPIView):
         return super().get_permissions()
 
 
+# API view for updating the verification status of a provider. This view is restricted to admin users only.
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
 def update_provider_verification_status(request):
@@ -55,6 +59,7 @@ def update_provider_verification_status(request):
     provider_id = data.get("provider_id")
     verification_status = data.get("verification_status")
 
+    # Validate the provided verification status against the allowed values defined in ProviderVerificationStatus.
     if verification_status not in ProviderVerificationStatus.values:
         return Response(
             {"error": "Invalid status"},

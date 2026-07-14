@@ -3,6 +3,7 @@ from rest_framework import serializers
 from apps.customers.models import CustomerProfile
 from apps.core.validators import validate_image
 
+# Serializer for the CustomerProfile model, handling serialization and deserialization of customer profile data.
 class CustomerProfileSerializer(serializers.ModelSerializer):
     user_id = serializers.UUIDField(source="user.id", read_only=True)
     phone_number = serializers.CharField(source="user.phone_number", required=False)
