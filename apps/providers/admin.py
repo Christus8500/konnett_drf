@@ -4,7 +4,7 @@ from apps.providers.models import ProviderProfile, ProviderVerification
 # Register your models here.
 @admin.register(ProviderProfile)
 class ProviderProfileAdmin(admin.ModelAdmin):
-    list_display = ("fullname",)
+    list_display = ("fullname", "is_verified", "is_available")
     search_fields = ("user__email",)
 
 

@@ -1,5 +1,5 @@
 @baseUrl = http://localhost:8000
-@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg0MjEwMTAwLCJpYXQiOjE3ODQyMDgzMDAsImp0aSI6Ijg3MzZiZTQ5MDYxMTRhZmQ4YjQxNjZmNGFhODJkNzkwIiwidXNlcl9pZCI6ImNiNzc5NjY2LTcxNzctNDdkNS04OTkyLWFlYzQxNzZiNTliMCJ9.kVoa6O4sop_Yr8QyIoD0tZJBvJXHqK9WNOY6qyqTGKM
+@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg0MjQxODQ5LCJpYXQiOjE3ODQyNDAwNDksImp0aSI6ImJkYmU5ZmUzNDZjYTQ0YzhiZGY3MTFlNDFlZGNiMzM2IiwidXNlcl9pZCI6IjcxZGQ4OGViLWJiNDEtNGQ1Yy1hODA2LTI4OGQ1YjUwYmQ4ZSJ9.7GP3sqa4tGfZBIlrdWfegPq6lHBrdoTSCyvEmWpF93c
 @refreshToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc4NDgxMDc4MiwiaWF0IjoxNzg0MjA1OTgyLCJqdGkiOiI5MzU3NDNkZGVkNzQ0MDY1YmU0MWExMWEwNDdmM2VkMSIsInVzZXJfaWQiOiI4MDlhMWU1MC02Y2Y5LTQxMWUtOWRhMS1iYzE4YmE3YWRkODkifQ.BWGp0iFmr-GDJpG1pvkWzgcVRLL3SaAKKtEChYhhtS8
 
 ###
@@ -10,7 +10,7 @@ Content-Type: application/json
 Authorization: Bearer {{accessToken}}
 
 {
-    "name": "Transportation"
+    "name": "Logistics"
 }
 
 
@@ -37,10 +37,10 @@ Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
 {
-    "category": "a48e8027-1385-4df8-ac75-deb8dea07301",
-    "title": "Taxi Service",
+    "category": "93664e8e-6314-4212-ae17-5f369ffa02d4",
+    "title": "Uber Service",
     "description": "I can take you anywhere",
-    "minimum_price": "2000",
+    "minimum_price": "3000",
     "is_active": "true"
 }
 

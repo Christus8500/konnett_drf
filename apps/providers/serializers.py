@@ -18,8 +18,8 @@ class ProviderProfileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ProviderProfile
-        fields = ["id","user_id", "phone_number", "first_name", "last_name", "business_name", "bio", "years_of_experience", "is_available", "average_rating", "completed_jobs", "profile_image", "created_at", "updated_at"]
-        read_only_fields = ["id", "user_id", "average_rating", "completed_jobs", "created_at", "updated_at"]
+        fields = ["id","user_id", "phone_number", "first_name", "last_name", "business_name", "is_verified", "bio", "years_of_experience", "is_available", "average_rating", "completed_jobs", "profile_image", "created_at", "updated_at"]
+        read_only_fields = ["id", "user_id", "is_verified", "average_rating", "completed_jobs", "created_at", "updated_at"]
 
     def validate_years_of_experience(self, value):
         if value < 0:

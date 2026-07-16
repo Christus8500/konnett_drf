@@ -7,7 +7,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from apps.services.serializers import CategorySerializer, ServiceReadSerializer, ServiceWriteSerializer
 from apps.services.models import Category, Service
 from apps.services.filters import ServiceFilter
-from apps.core.permissions import IsProvider, IsProviderOwner
+from apps.core.permissions import IsProvider, IsProviderOwner, IsVerifiedProvider
 
 # Create your views here.
 
@@ -47,7 +47,7 @@ class ListCreateServiceView(generics.ListCreateAPIView):
     def get_permissions(self):
         if self.request.method == "GET":
             return [AllowAny()]
-        return [IsProvider()]
+        return [IsProvider(), IsVerifiedProvider()]
 
     # Override the perform_create method to associate the newly created service with the logged-in provider.
     def perform_create(self, serializer):
