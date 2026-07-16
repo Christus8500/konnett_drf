@@ -61,3 +61,13 @@ class IsProvider(BasePermission):
             and request.user.role == "provider"
         )
     
+
+class IsProviderOwner(BasePermission):
+    """
+    Allows access only to the owner of a provider instance.
+    """
+    def has_object_permission(self, request, view, obj):
+        if not request.user.is_authenticated:
+            return False
+
+        return obj.provider.user == request.user

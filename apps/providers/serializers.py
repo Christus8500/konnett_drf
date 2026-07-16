@@ -6,7 +6,7 @@ from apps.core.choices import ProviderVerificationStatus
 
 # Serializer for the ProviderProfile model, handling serialization and deserialization of provider profile data.
 class ProviderProfileSerializer(serializers.ModelSerializer):
-    user_id = serializers.UUIDField(source="user.id", required=False)
+    user_id = serializers.UUIDField(source="user.id", required=False, read_only=True)
     phone_number = serializers.CharField(source="user.phone_number", required=False)
     first_name = serializers.CharField(source="user.first_name", required=False)
     last_name = serializers.CharField(source="user.last_name", required=False)
@@ -18,8 +18,8 @@ class ProviderProfileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ProviderProfile
-        fields = ["id","user_id", "phone_number", "first_name", "last_name","business_name", "bio", "years_of_experience", "is_available", "average_rating", "completed_jobs", "profile_image", "created_at", "updated_at"]
-        read_only_fields = ["id","user_id", "average_rating", "completed_jobs", "created_at", "updated_at"]
+        fields = ["id","user_id", "phone_number", "first_name", "last_name", "business_name", "bio", "years_of_experience", "is_available", "average_rating", "completed_jobs", "profile_image", "created_at", "updated_at"]
+        read_only_fields = ["id", "user_id", "average_rating", "completed_jobs", "created_at", "updated_at"]
 
     def validate_years_of_experience(self, value):
         if value < 0:

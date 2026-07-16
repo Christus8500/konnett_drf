@@ -1,32 +1,68 @@
-import uuid 
+from decimal import Decimal
+
 from django.db import models
+from django.core.validators import MinValueValidator
+from django.utils.text import slugify
+
+from apps.core.models import UUIDModel
 
 # Create your models here.
-# class ServiceCategory(models.Model):
 
-#     id = models.UUIDField(
-#         primary_key=True,
-#         default=uuid.uuid4,
-#         editable=False
-#     )
+# Category model representing a category of services, with a unique name and slug.
+class Category(UUIDModel):
+    name = models.CharField(
+        max_length=100,
+        unique=True
+    )
+    slug = models.SlugField(max_length=255, unique=True, blank=True)
 
-#     name = models.CharField(
-#         max_length=100,
-#         unique=True
-#     )
+    # Override the save method to automatically generate a unique slug based on the category name.
+    def save(self, *args, **kwargs):
+        should_generate_slug = False
 
-#     description = models.TextField(blank=True)
+        if self.pk is None:
+            # New category
+            should_generate_slug = True
+        else:
+            old = Category.objects.filter(pk=self.pk).only("name").first()
+            if old and old.name != self.name:
+                # Name changed
+                should_generate_slug = True
+
+        if should_generate_slug:
+            base_slug = slugify(self.name) or "category"
+            slug = base_slug
+            counter = 1
+
+            while Category.objects.filter(slug=slug).exclude(pk=self.pk).exists():
+                slug = f"{base_slug}-{counter}"
+                counter += 1
+
+            self.slug = slug
+
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.name
 
 
-# class ProviderService(models.Model):
+# Service model representing a service offered by a provider, linked to a category.
+class Service(UUIDModel):
+    provider = models.ForeignKey(
+        "providers.ProviderProfile",
+        on_delete=models.CASCADE,
+        related_name="services"
+    )
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.CASCADE,
+        related_name="services"
+    )
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    minimum_price = models.DecimalField(
+        max_digits=20, decimal_places=2, validators=[MinValueValidator(Decimal("100.00"))])
+    is_active = models.BooleanField(default=True)
 
-#     provider = models.ForeignKey(
-#         "providers.ProviderProfile",
-#         on_delete=models.CASCADE
-#     )
-
-#     category = models.ForeignKey(
-#         ServiceCategory,
-#         on_delete=models.CASCADE
-#     )
-
+    def __str__(self):
+        return self.title

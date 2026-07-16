@@ -3,11 +3,10 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 
-from apps.core.permissions import IsOwner, IsOwnerOrAdmin
+from apps.core.permissions import IsOwner, IsOwnerOrAdmin, IsProviderOwner
 from apps.core.choices import ProviderVerificationStatus
 from apps.providers.models import ProviderProfile, ProviderVerification
 from apps.providers.serializers import ProviderProfileSerializer, ProviderVerificationSerializer
-from apps.providers.permissions import IsProviderVerificationOwner
 
 # Create your views here.
 
@@ -45,9 +44,9 @@ class ProviderVerificationView(generics.RetrieveUpdateAPIView):
 
     def get_permissions(self):
         if self.request.method == "PATCH":
-            self.permission_classes = [IsProviderVerificationOwner]
+            self.permission_classes = [IsProviderOwner]
         else:
-            self.permission_classes = [IsAdminUser | IsProviderVerificationOwner]
+            self.permission_classes = [IsAdminUser | IsProviderOwner]
         return super().get_permissions()
 
 
