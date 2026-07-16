@@ -18,27 +18,15 @@ class Category(UUIDModel):
 
     # Override the save method to automatically generate a unique slug based on the category name.
     def save(self, *args, **kwargs):
-        should_generate_slug = False
+        base_slug = slugify(self.name) or "category"
+        slug = base_slug
+        counter = 1
 
-        if self.pk is None:
-            # New category
-            should_generate_slug = True
-        else:
-            old = Category.objects.filter(pk=self.pk).only("name").first()
-            if old and old.name != self.name:
-                # Name changed
-                should_generate_slug = True
+        while Category.objects.filter(slug=slug).exclude(pk=self.pk).exists():
+            slug = f"{base_slug}-{counter}"
+            counter += 1
 
-        if should_generate_slug:
-            base_slug = slugify(self.name) or "category"
-            slug = base_slug
-            counter = 1
-
-            while Category.objects.filter(slug=slug).exclude(pk=self.pk).exists():
-                slug = f"{base_slug}-{counter}"
-                counter += 1
-
-            self.slug = slug
+        self.slug = slug
 
         super().save(*args, **kwargs)
 

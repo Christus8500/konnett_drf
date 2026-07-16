@@ -1,0 +1,65 @@
+@baseUrl = http://localhost:8000
+@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg0MjEwMTAwLCJpYXQiOjE3ODQyMDgzMDAsImp0aSI6Ijg3MzZiZTQ5MDYxMTRhZmQ4YjQxNjZmNGFhODJkNzkwIiwidXNlcl9pZCI6ImNiNzc5NjY2LTcxNzctNDdkNS04OTkyLWFlYzQxNzZiNTliMCJ9.kVoa6O4sop_Yr8QyIoD0tZJBvJXHqK9WNOY6qyqTGKM
+@refreshToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc4NDgxMDc4MiwiaWF0IjoxNzg0MjA1OTgyLCJqdGkiOiI5MzU3NDNkZGVkNzQ0MDY1YmU0MWExMWEwNDdmM2VkMSIsInVzZXJfaWQiOiI4MDlhMWU1MC02Y2Y5LTQxMWUtOWRhMS1iYzE4YmE3YWRkODkifQ.BWGp0iFmr-GDJpG1pvkWzgcVRLL3SaAKKtEChYhhtS8
+
+###
+# Create categories.
+# Only an admin can do that
+POST {{baseUrl}}/api/services/categories/
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+    "name": "Transportation"
+}
+
+
+###
+# Get all categories
+GET {{baseUrl}}/api/services/categories/
+
+
+###
+# Get all services
+GET {{baseUrl}}/api/services/
+
+
+###
+# Get logged in provider's services, by that provider
+GET {{baseUrl}}/api/services/my-services/
+Authorization: Bearer {{accessToken}}
+
+
+###
+# Create a service. Only a provider can do that
+POST {{baseUrl}}/api/services/
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+    "category": "a48e8027-1385-4df8-ac75-deb8dea07301",
+    "title": "Taxi Service",
+    "description": "I can take you anywhere",
+    "minimum_price": "2000",
+    "is_active": "true"
+}
+
+
+###
+# Update a service. 
+# Only the provider that owns that service can do that
+PATCH {{baseUrl}}/api/services/23b1daaf-14be-47bf-8a81-880d8c4b2ace/
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+    "minimum_price": "1000",
+    "is_active": "false"
+}
+
+
+###
+# Delete a service. 
+# Only the provider that owns that service can do that
+DELETE {{baseUrl}}/api/services/23b1daaf-14be-47bf-8a81-880d8c4b2ace/
+Authorization: Bearer {{accessToken}}

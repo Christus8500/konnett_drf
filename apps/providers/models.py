@@ -35,7 +35,7 @@ class ProviderProfile(UUIDModel, TimeStampedModel):
         return f'{self.user.first_name} {self.user.last_name}'.strip()
 
     def __str__(self):
-        return self.business_name
+        return self.fullname
     
 
 # ProviderVerification: A model representing the verification status of a provider, linked to a ProviderProfile instance.

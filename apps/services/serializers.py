@@ -12,10 +12,17 @@ class CategorySerializer(serializers.ModelSerializer):
 
 # Serializer for the Service model, used to serialize and deserialize service data.
 class ServiceReadSerializer(serializers.ModelSerializer):
+    class InlineCategorySerializer(serializers.ModelSerializer):
+        class Meta:
+            model = Category
+            fields = ["id", "name"]
+            read_only_fields = ["id"]
+
     provider_id = serializers.UUIDField(source="provider.id", read_only=True)
     provider_name = serializers.CharField(source="provider.fullname", read_only=True)
     provider_image = serializers.ImageField(source="provider.profile_image", read_only=True)
-    category = serializers.CharField(source="category.name", read_only=True)
+    
+    category = InlineCategorySerializer(read_only=True)
 
     class Meta:
         model = Service

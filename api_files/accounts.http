@@ -1,6 +1,6 @@
 @baseUrl = http://localhost:8000
-@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzgzNjc1NjA5LCJpYXQiOjE3ODM2NzM4MDksImp0aSI6ImMzMDVkMmU4NWQ3ZTQxNGI5YTYyMmQxMjc5NTIzODQ3IiwidXNlcl9pZCI6IjcxZGQ4OGViLWJiNDEtNGQ1Yy1hODA2LTI4OGQ1YjUwYmQ4ZSJ9.Y_xqH4bNoMbQewjO2BBpKlHpLp3zpmpfwoGwxVhS0ag
-@refreshToken = paste_refresh_token_here
+@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg0MjA3NzgyLCJpYXQiOjE3ODQyMDU5ODIsImp0aSI6IjQxMGIwZTQ1ZmVjMzQ0ODZiYTc3YjBlMWU4ZDQxMWFiIiwidXNlcl9pZCI6IjgwOWExZTUwLTZjZjktNDExZS05ZGExLWJjMThiYTdhZGQ4OSJ9.OpZ2APBxqnnWuhKEYfW0pJp0OaRR2vKe6tJf0OKzA7w
+@refreshToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc4NDgxMDc4MiwiaWF0IjoxNzg0MjA1OTgyLCJqdGkiOiI5MzU3NDNkZGVkNzQ0MDY1YmU0MWExMWEwNDdmM2VkMSIsInVzZXJfaWQiOiI4MDlhMWU1MC02Y2Y5LTQxMWUtOWRhMS1iYzE4YmE3YWRkODkifQ.BWGp0iFmr-GDJpG1pvkWzgcVRLL3SaAKKtEChYhhtS8
 
 ###
 # Register Customer
@@ -23,12 +23,12 @@ POST {{baseUrl}}/api/accounts/register/
 Content-Type: application/json
 
 {
-    "email": "janedoe@example.com",
-    "phone_number": "09056658000",
-    "password": "Janedoe123!",
-    "confirm_password": "Janedoe123!",
-    "first_name": "Jane",
-    "last_name": "Doe",
+    "email": "thehulk@example.com",
+    "phone_number": "09056695000",
+    "password": "Thehulk123!",
+    "confirm_password": "Thehulk123!",
+    "first_name": "Bruce",
+    "last_name": "Barner",
     "role": "provider"
 }
 
