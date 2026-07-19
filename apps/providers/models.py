@@ -29,6 +29,9 @@ class ProviderProfile(UUIDModel, TimeStampedModel):
     completed_jobs = models.PositiveIntegerField(default=0)
     profile_image = models.ImageField(upload_to=profile_image_upload, blank=True, null=True)
     is_verified = models.BooleanField(default=False)
+    account_number = models.CharField(max_length=10, blank=True, null=True, default="0000000000")
+    account_name = models.CharField(max_length=255, blank=True, null=True, default="N/A")
+    bank_name = models.CharField(max_length=255, blank=True, null=True, default="N/A")
 
     #property method to get the full name of the customer by combining first and last names from the linked user instance.
     @property
