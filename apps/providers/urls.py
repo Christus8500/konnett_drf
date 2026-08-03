@@ -6,5 +6,5 @@ urlpatterns = [
     path("profile/<uuid:user_id>/", ProviderProfileView.as_view(), name="provider_profile"),
     path("verification/<uuid:provider_id>/", ProviderVerificationView.as_view(), name="provider_verification"),
 
-    path("verification/update_status/", update_provider_verification_status, name="update_provider_verification_status"),
+    path("verification/<uuid:provider_id>/update_status/", update_provider_verification_status, name="update-provider-verification-status"),
 ]

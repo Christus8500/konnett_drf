@@ -1,6 +1,16 @@
 @baseUrl = http://localhost:8000
-@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg0MjA3NzgyLCJpYXQiOjE3ODQyMDU5ODIsImp0aSI6IjQxMGIwZTQ1ZmVjMzQ0ODZiYTc3YjBlMWU4ZDQxMWFiIiwidXNlcl9pZCI6IjgwOWExZTUwLTZjZjktNDExZS05ZGExLWJjMThiYTdhZGQ4OSJ9.OpZ2APBxqnnWuhKEYfW0pJp0OaRR2vKe6tJf0OKzA7w
-@refreshToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc4NDgxMDc4MiwiaWF0IjoxNzg0MjA1OTgyLCJqdGkiOiI5MzU3NDNkZGVkNzQ0MDY1YmU0MWExMWEwNDdmM2VkMSIsInVzZXJfaWQiOiI4MDlhMWU1MC02Y2Y5LTQxMWUtOWRhMS1iYzE4YmE3YWRkODkifQ.BWGp0iFmr-GDJpG1pvkWzgcVRLL3SaAKKtEChYhhtS8
+@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg1MjQxNDE5LCJpYXQiOjE3ODUyMzk2MTksImp0aSI6Ijk1YTRhMTFlMjA5MDRjYTZhM2Q4YTk2OGEyNDAwZjIxIiwidXNlcl9pZCI6ImNiNzc5NjY2LTcxNzctNDdkNS04OTkyLWFlYzQxNzZiNTliMCJ9.SITbDX15E1olX06cMDn76Jau_nsdC9U44TKcnls46Bo
+@refreshToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc4NTg0NDQxOSwiaWF0IjoxNzg1MjM5NjE5LCJqdGkiOiJkY2NhNjc4MmMyM2I0NzhkYmU1ZWZlNzgyZWRmZGMzZSIsInVzZXJfaWQiOiJjYjc3OTY2Ni03MTc3LTQ3ZDUtODk5Mi1hZWM0MTc2YjU5YjAifQ.86PO0xoxD1BrVOXwGEuysoCqJVRxwbPBGX-wRVmh__s
+
+###
+# Login
+POST {{baseUrl}}/api/accounts/login/
+Content-Type: application/json
+
+{
+    "email": "konnettuser@gmail.com",
+    "password": "konnett$2500"
+}
 
 ###
 # Register Customer
@@ -38,8 +48,8 @@ POST {{baseUrl}}/api/accounts/login/
 Content-Type: application/json
 
 {
-    "email": "johndoe@example.com",
-    "password": "Johndoe123!"
+    "email": "thehulk@example.com",
+    "password": "Thehulk123!"
 }
 
 ###

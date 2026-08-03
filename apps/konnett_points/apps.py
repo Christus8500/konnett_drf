@@ -1,6 +1,6 @@
 from django.apps import AppConfig
 
 
-class PaymentsConfig(AppConfig):
+class KonnettPointsConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
-    name = 'apps.payments'
+    name = 'apps.konnett_points'

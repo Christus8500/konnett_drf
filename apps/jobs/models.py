@@ -1,138 +1,151 @@
-import uuid
 from django.db import models
+from django.utils import timezone
+from django.conf import settings
+from django.core.validators import MinValueValidator
+
+from apps.core.choices import JobRequestStatus, JobOfferStatus, JobDisputeDecision
+from apps.core.models import UUIDModel, TimeStampedModel
+
+
+# custom upload paths for job request and completion images
+def job_request_image_upload(instance, filename):
+    return f"jobs/{instance.job.id}/job_requests/{filename}"
+
+def job_completion_image_upload(instance, filename):
+    return f"jobs/{instance.job.id}/job_completion/{filename}"
+
 
 # Create your models here.
-# class ServiceRequest(models.Model):
+class JobRequest(UUIDModel, TimeStampedModel):
+    customer = models.ForeignKey(
+        "customers.CustomerProfile",
+        on_delete=models.CASCADE,
+        related_name="job_requests"
+    )
+    category = models.ForeignKey(
+        "services.Category",
+        on_delete=models.CASCADE,
+        related_name="job_requests"
+    )
+    title = models.CharField(max_length=255)
+    description = models.TextField()
+    points_amount = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    deadline = models.DateTimeField(blank=True, null=True)
 
-#     STATUS_CHOICES = (
-#         ("open", "Open"),
-#         ("assigned", "Assigned"),
-#         ("in_progress", "In Progress"),
-#         ("completed", "Completed"),
-#         ("cancelled", "Cancelled"),
-#     )
+    job_address = models.TextField()
+    city = models.CharField(max_length=255)
+    state = models.CharField(max_length=255)
 
-#     id = models.UUIDField(
-#         primary_key=True,
-#         default=uuid.uuid4,
-#         editable=False
-#     )
+    status = models.CharField(
+        max_length=30,
+        choices=JobRequestStatus.choices,
+        default=JobRequestStatus.PENDING,
+        db_index=True,
+    )
+    completed_at = models.DateTimeField(blank=True, null=True)
 
-#     customer = models.ForeignKey(
-#         "accounts.User",
-#         on_delete=models.CASCADE
-#     )
+    class Meta:
+        ordering = ["-created_at"]
 
-#     category = models.ForeignKey(
-#         "services.ServiceCategory",
-#         on_delete=models.CASCADE
-#     )
+    # The save method is overridden to automatically set the completed_at field to the current time when the job status is changed to COMPLETED and completed_at is not already set.
+    def save(self, *args, **kwargs):
+        if (self.status == JobRequestStatus.COMPLETED and self.completed_at is None):
+            self.completed_at = timezone.now()
+        super().save(*args, **kwargs)
 
-#     title = models.CharField(max_length=255)
-
-#     description = models.TextField()
-
-#     budget = models.DecimalField(
-#         max_digits=12,
-#         decimal_places=2
-#     )
-
-#     address = models.TextField()
-
-#     status = models.CharField(
-#         max_length=20,
-#         choices=STATUS_CHOICES,
-#         default="open"
-#     )
-
-#     created_at = models.DateTimeField(auto_now_add=True)
-
-#     updated_at = models.DateTimeField(auto_now=True)
+    def __str__(self):
+        return f"{self.title}, by {self.customer}"
 
 
-# class ServiceRequestImage(models.Model):
 
-#     request = models.ForeignKey(
-#         ServiceRequest,
-#         on_delete=models.CASCADE,
-#         related_name="images"
-#     )
+class JobRequestImage(UUIDModel):
+    job = models.ForeignKey(
+        JobRequest,
+        on_delete=models.CASCADE,
+        related_name="job_request_images"
+    )
+    image = models.ImageField(
+        upload_to=job_request_image_upload
+    )
 
-#     image = models.ImageField(
-#         upload_to="requests/"
-#     )
-
-
-# class ProviderApplication(models.Model):
-
-#     STATUS_CHOICES = (
-#         ("pending", "Pending"),
-#         ("accepted", "Accepted"),
-#         ("declined", "Declined"),
-#     )
-
-#     request = models.ForeignKey(
-#         ServiceRequest,
-#         on_delete=models.CASCADE
-#     )
-
-#     provider = models.ForeignKey(
-#         "providers.ProviderProfile",
-#         on_delete=models.CASCADE
-#     )
-
-#     status = models.CharField(
-#         max_length=20,
-#         choices=STATUS_CHOICES,
-#         default="pending"
-#     )
-
-#     created_at = models.DateTimeField(auto_now_add=True)
-
-#     class Meta:
-#         unique_together = ("request", "provider")
+    def __str__(self):
+        return f"Image for {self.job}"
 
 
-# class JobAssignment(models.Model):
+class JobCompletionImage(UUIDModel):
+    job = models.ForeignKey(
+        JobRequest,
+        on_delete=models.CASCADE,
+        related_name="job_completion_images"
+    )
+    provider = models.ForeignKey(
+        "providers.ProviderProfile",
+        on_delete=models.CASCADE,
+        related_name="job_completion_images"      
+    )
+    image = models.ImageField(upload_to=job_completion_image_upload)
 
-#     request = models.OneToOneField(
-#         ServiceRequest,
-#         on_delete=models.CASCADE
-#     )
-
-#     provider = models.ForeignKey(
-#         "providers.ProviderProfile",
-#         on_delete=models.CASCADE
-#     )
-
-#     assigned_at = models.DateTimeField(auto_now_add=True)
-
-
-# class CompletionProof(models.Model):
-
-#     request = models.OneToOneField(
-#         ServiceRequest,
-#         on_delete=models.CASCADE
-#     )
-
-#     provider = models.ForeignKey(
-#         "providers.ProviderProfile",
-#         on_delete=models.CASCADE
-#     )
-
-#     notes = models.TextField(blank=True)
-
-#     submitted_at = models.DateTimeField(auto_now_add=True)
+    def __str__(self):
+        return f"Completion image for {self.job}, by {self.provider}"
 
 
-# class CompletionProofImage(models.Model):
+class JobRequestOffer(UUIDModel, TimeStampedModel):
+    job = models.ForeignKey(
+        JobRequest,
+        on_delete=models.CASCADE,
+        related_name="job_offers"
+    )
+    provider = models.ForeignKey(
+        "providers.ProviderProfile",
+        on_delete=models.CASCADE,
+        related_name="job_offers"
+    )
+    status = models.CharField(
+        max_length=30,
+        choices=JobOfferStatus.choices,
+        default=JobOfferStatus.PENDING
+    )
 
-#     proof = models.ForeignKey(
-#         CompletionProof,
-#         on_delete=models.CASCADE
-#     )
+    # The Meta class defines a unique constraint to ensure that a provider can only make one offer per job. 
+    # It also specifies the default ordering of JobRequestOffer instances by their creation date in descending order.
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["job", "provider"],
+                name="unique_job_provider_offer",
+            )
+        ]
+        ordering = ["-created_at"]
 
-#     image = models.ImageField(
-#         upload_to="completion_proofs/"
-#     )
+    def __str__(self):
+        return f"{self.provider} → {self.job}"
+
+
+class JobDispute(UUIDModel):
+    job = models.OneToOneField(
+        JobRequest,
+        on_delete=models.CASCADE,
+        related_name="dispute",
+    )
+    customer_reason = models.TextField()
+    admin_note = models.TextField(blank=True, null=True)
+    decision = models.CharField(max_length=20, choices=JobDisputeDecision.choices, 
+        blank=True, null=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="resolved_job_disputes",
+    )
+    resolved_at = models.DateTimeField(blank=True, null=True)
+
+    def save(self, *args, **kwargs):
+        if self.decision and self.resolved_at is None:
+            self.resolved_at = timezone.now()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Dispute - {self.job.title}"
+
 

@@ -55,7 +55,7 @@ INSTALLED_APPS = [
     'apps.providers.apps.ProvidersConfig',
     'apps.services.apps.ServicesConfig',
     'apps.jobs.apps.JobsConfig',
-    'apps.payments.apps.PaymentsConfig',
+    'apps.konnett_points.apps.KonnettPointsConfig',
 ]
 
 AUTH_USER_MODEL = 'accounts.User'

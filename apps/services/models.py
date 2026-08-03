@@ -1,5 +1,3 @@
-from decimal import Decimal
-
 from django.db import models
 from django.core.validators import MinValueValidator
 from django.utils.text import slugify
@@ -48,8 +46,7 @@ class Service(UUIDModel):
     )
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
-    minimum_price = models.DecimalField(
-        max_digits=20, decimal_places=2, validators=[MinValueValidator(Decimal("100.00"))])
+    minimum_points = models.PositiveIntegerField(validators=[MinValueValidator(1)])
     is_active = models.BooleanField(default=True)
 
     def __str__(self):

@@ -1,8 +1,8 @@
 @baseUrl = http://localhost:8000
 
-@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg0MjQyMDE0LCJpYXQiOjE3ODQyNDAyMTQsImp0aSI6ImViMjFiOTM1OTZjNDRjNTlhMzE4MGYyNDVlYzQ3ZDhjIiwidXNlcl9pZCI6IjcxZGQ4OGViLWJiNDEtNGQ1Yy1hODA2LTI4OGQ1YjUwYmQ4ZSJ9.vJOkZAS6yI_uJRnb22bVHLyUL00eqez9YRd0oSqhNh8
+@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg1Mjc2NjIyLCJpYXQiOjE3ODUyNzQ4MjMsImp0aSI6ImUwMWE2OWVmYjYxYjRlMWJhNWViYzY3MGRkM2Y2OTM3IiwidXNlcl9pZCI6IjcxZGQ4OGViLWJiNDEtNGQ1Yy1hODA2LTI4OGQ1YjUwYmQ4ZSJ9.oeNlDhrYaasApz8Vnq_bHlJcVu-1MhVvUqKkT74GLJc
 
-@refreshToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc4NDg0NTAxNCwiaWF0IjoxNzg0MjQwMjE0LCJqdGkiOiI4ODYyYWExM2E3YjU0ZTFkYTE2MmM1NjcxY2YwYjcxYyIsInVzZXJfaWQiOiI3MWRkODhlYi1iYjQxLTRkNWMtYTgwNi0yODhkNWI1MGJkOGUifQ.CrFVkNazFDCLPAcLz_r-lbkdeyvRiYI1LPJkEtW1sTE
+@refreshToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc4NTg3OTYyMiwiaWF0IjoxNzg1Mjc0ODIyLCJqdGkiOiIyODhkMTRhZTFiOGI0M2Y2OWEwZGRlZjRjZTFjYjI3MCIsInVzZXJfaWQiOiI3MWRkODhlYi1iYjQxLTRkNWMtYTgwNi0yODhkNWI1MGJkOGUifQ.C4KYC6XQowRAekLmZnNK_iYQLXBsA06NyqKquEvkU5s
 
 ###
 # Login
@@ -12,16 +12,6 @@ Content-Type: application/json
 {
     "email": "janedoe@example.com",
     "password": "Janedoe123!"
-}
-
-###
-# Login
-POST {{baseUrl}}/api/accounts/login/
-Content-Type: application/json
-
-{
-    "email": "konnettuser@gmail.com",
-    "password": "konnett$2500"
 }
 
 
@@ -81,11 +71,10 @@ Content-Type: application/json
 # Update Provider Verification Status (Admin Only)
 # The lookup field and kwarg is the provider_id
 # Verification status can be either "pending", "verified" or "rejected"
-POST {{baseUrl}}/api/providers/verification/update_status/
+PATCH {{baseUrl}}/api/providers/verification/7872d35a-9935-4d49-95e1-409f33014f9a/update_status/
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
 {
-    "verification_status": "verified",
-    "provider_id": "7872d35a-9935-4d49-95e1-409f33014f9a"
+    "verification_status": "verified"
 }

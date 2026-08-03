@@ -2,6 +2,7 @@ from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError
 
 from apps.core.permissions import IsOwner, IsOwnerOrAdmin, IsProviderOwner
 from apps.core.choices import ProviderVerificationStatus
@@ -22,7 +23,7 @@ class ProviderProfileView(generics.RetrieveUpdateAPIView):
     #Allow only fetch and update
     http_method_names = ["get", "patch"]
 
-    #Overriding get_permissions(): Admin can fetch any customer profile, but only the owner can update their own profile.
+    #Overriding get_permissions(): Admin can fetch any provider profile, but only the owner can update their own profile.
     def get_permissions(self):
         self.permission_classes = [IsOwnerOrAdmin]
         if self.request.method == 'PATCH':
@@ -42,6 +43,14 @@ class ProviderVerificationView(generics.RetrieveUpdateAPIView):
     #Allow only fetch and update
     http_method_names = ["get", "patch"]
 
+    def perform_update(self, serializer):
+        verification = self.get_object()
+
+        if verification.provider.is_verified:
+            raise ValidationError("You are already verified.")
+
+        serializer.save()
+
     def get_permissions(self):
         if self.request.method == "PATCH":
             self.permission_classes = [IsProviderOwner]
@@ -51,34 +60,43 @@ class ProviderVerificationView(generics.RetrieveUpdateAPIView):
 
 
 # API view for updating the verification status of a provider. This view is restricted to admin users only.
-@api_view(["POST"])
+@api_view(["PATCH"])
 @permission_classes([IsAdminUser])
-def update_provider_verification_status(request):
-    data = request.data
-    provider_id = data.get("provider_id")
-    verification_status = data.get("verification_status")
+def update_provider_verification_status(request, provider_id):
+    verification_status = request.data.get("verification_status")
 
-    # Validate the provided verification status against the allowed values defined in ProviderVerificationStatus.
     if verification_status not in ProviderVerificationStatus.values:
         return Response(
-            {"error": "Invalid status"},
-            status=status.HTTP_400_BAD_REQUEST
+            {"error": "Invalid verification status."},
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Find the verification
     try:
-        verification = ProviderVerification.objects.get(provider__id=provider_id)        
+        verification = ProviderVerification.objects.get(provider_id=provider_id)
     except ProviderVerification.DoesNotExist:
         return Response(
-            {"error": f"Verification not found for provider {provider_id}"},
-            status=status.HTTP_404_NOT_FOUND
+            {"error": "Provider verification not found."},
+            status=status.HTTP_404_NOT_FOUND,
         )
-    
-    previous_verification_status = verification.status
+
+    if (
+        verification.provider.is_verified
+        and verification_status == ProviderVerificationStatus.VERIFIED
+    ):  
+        return Response(
+            {"detail": "This provider is already verified."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    previous_status = verification.status
     verification.status = verification_status
-    verification.save()
-    return Response({
-        "success": f"Verification status updated from {previous_verification_status} to {verification_status}",
-        # "verification": verification
-    })
+    verification.save(update_fields=["status"])
+
+    return Response(
+        {
+            "message": f"Verification status updated from {previous_status} to {verification.status}.",
+            "verification_status": verification.status,
+        },
+        status=status.HTTP_200_OK,
+    )
     

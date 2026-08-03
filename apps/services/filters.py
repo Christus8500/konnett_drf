@@ -6,6 +6,6 @@ class ServiceFilter(django_filters.FilterSet):
     class Meta:
         model = Service
         fields = [
-            "category",
+            "category__name",
             "is_active",
         ]

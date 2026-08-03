@@ -6,9 +6,9 @@ admin.site.register(Category)
 
 @admin.register(Service)
 class ProviderServiceAdmin(admin.ModelAdmin):
-    list_display = ("title", "provider", "category", "minimum_price", "is_active")
+    list_display = ("title", "provider", "category", "minimum_points", "is_active")
     search_fields = ("title",)
-    list_filter = ("category", "is_active")
+    list_filter = ("category__name", "is_active")
 
     #^^ When the app grows and there are many services, 
     #^^ it is better to use select_related to reduce the number of queries made to the database.

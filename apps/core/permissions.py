@@ -27,15 +27,6 @@ class IsOwner(BasePermission):
         if not request.user or not request.user.is_authenticated:
             return False
         return obj.user == request.user
-
-
-class IsAdmin(BasePermission):
-    """
-    Allows access only to admin users.
-    """
-
-    def has_permission(self, request, view):
-        return request.user and request.user.is_staff
     
 
 class IsCustomer(BasePermission):
@@ -49,6 +40,17 @@ class IsCustomer(BasePermission):
             and request.user.is_authenticated
             and request.user.role == "customer"
         )
+    
+
+class IsCustomerOwner(BasePermission):
+    """
+    Allows access only to the owner of a customer instance.
+    """
+    def has_object_permission(self, request, view, obj):
+        if not request.user.is_authenticated:
+            return False
+
+        return obj.customer.user == request.user
     
 
 class IsProvider(BasePermission):
@@ -75,16 +77,16 @@ class IsProviderOwner(BasePermission):
         return obj.provider.user == request.user
     
 
-# Custom permission class to check if the logged-in user is a verified provider.
 class IsVerifiedProvider(BasePermission):
+    """
+    Allows access only verified provider.
+    """
     message = "Only verified providers can perform this action."
 
     def has_permission(self, request, view):
         if not request.user.is_authenticated:
             return False
 
-        try:
-            return request.user.provider_profile.is_verified
-        except ObjectDoesNotExist:
-            self.message = "Provider profile not found."
-            return False
+        provider = getattr(request.user, "provider_profile", None)
+
+        return bool(provider and provider.is_verified)

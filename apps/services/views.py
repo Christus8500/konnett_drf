@@ -23,7 +23,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
         return [IsAdminUser()]
 
 
-# View for listing and creating services, allowing any user to list services but restricting creation to providers.
+# View for listing and creating services, allowing any user to list services but restricting creation to verified providers.
 class ListCreateServiceView(generics.ListCreateAPIView):
     queryset = Service.objects.select_related(
         "provider",

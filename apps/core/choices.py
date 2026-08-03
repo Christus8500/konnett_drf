@@ -8,22 +8,6 @@ class UserRole(models.TextChoices):
     PROVIDER = "provider", "Provider"
 
 
-# Choices for job status
-class JobStatus(models.TextChoices):
-    OPEN = "open", "Open"
-    OFFER_ACCEPTED = "offer_accepted", "Offer Accepted"
-    IN_PROGRESS = "in_progress", "In Progress"
-    COMPLETED = "completed", "Completed"
-    CANCELLED = "cancelled", "Cancelled"
-
-
-# Choices for offer status
-class OfferStatus(models.TextChoices):
-    PENDING = "pending", "Pending"
-    ACCEPTED = "accepted", "Accepted"
-    REJECTED = "rejected", "Rejected"
-
-
 # Choices for provider verification status
 class ProviderVerificationStatus(models.TextChoices):
     PENDING = "pending", "Pending"
@@ -31,8 +15,52 @@ class ProviderVerificationStatus(models.TextChoices):
     REJECTED = "rejected", "Rejected"
 
 
+# Choices for job status
+class JobRequestStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    OPEN = "open", "Open"
+    IN_PROGRESS = "in_progress", "In Progress"
+    AWAITING_CONFIRMATION = "awaiting_confirmation", "Awaiting Confirmation"
+    COMPLETED = "completed", "Completed"
+    DISPUTED = "disputed", "Disputed"
+    CANCELLED = "cancelled", "Cancelled"
+
+
+# Choices for offer status
+class JobOfferStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    ACCEPTED = "accepted", "Accepted"
+    REJECTED = "rejected", "Rejected"
+    WITHDRAWN = "withdrawn", "Withdrawn"
+
+
+# Choices for dispute decision
+class JobDisputeDecision(models.TextChoices):
+    RELEASE_POINTS = "release_points", "Release Points"
+    REFUND_POINTS = "refund_points", "Refund Points"
+
+
 # Choices for payment status
 class PaymentStatus(models.TextChoices):
     PENDING = "pending", "Pending"
     SUCCESS = "success", "Success"
     FAILED = "failed", "Failed"
+
+
+#  Choices for konnet points transaction type
+class TransactionType(models.TextChoices):
+    PURCHASE = "purchase", "Purchase"
+    LOCK = "lock", "Lock"
+    UNLOCK = "unlock", "Unlock"
+    EARNED = "earned", "Earned"
+    WITHDRAWAL = "withdrawal", "Withdrawal"
+    REFUND = "refund", "Refund"
+    ADJUSTMENT = "adjustment", "Adjustment"
+
+
+#  Choices for withdrawal status
+class WithdrawalStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    APPROVED = "approved", "Approved"
+    REJECTED = "rejected", "Rejected"
+    PAID = "paid", "Paid"
