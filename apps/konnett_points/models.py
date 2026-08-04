@@ -6,32 +6,30 @@ from django.conf import settings
 from django.core.validators import MinValueValidator
 
 from apps.core.models import UUIDModel, TimeStampedModel
-from apps.core.choices import PaymentStatus, TransactionType, WithdrawalStatus
+from apps.core.choices import PaymentStatus, TransactionType, WithdrawalStatus, UserRole
 
 # Create your models here.
+
 
 # PointWallet model represents a user's point balance.
 class PointWallet(UUIDModel):
     user = models.OneToOneField(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="point_wallet"
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="point_wallet"
     )
     available_points = models.PositiveIntegerField(
-        validators=[MinValueValidator(0)],
-        default=0
+        validators=[MinValueValidator(0)], default=0
     )
     locked_points = models.PositiveIntegerField(
-        validators=[MinValueValidator(0)],
-        default=0
+        validators=[MinValueValidator(0)], default=0
     )
     earned_points = models.PositiveIntegerField(
-        validators=[MinValueValidator(0)],
-        default=0
+        validators=[MinValueValidator(0)], default=0
     )
 
     def __str__(self):
-        return f"{self.user.first_name} - AP: {self.available_points} points"
+        if self.user.role == UserRole.CUSTOMER:
+            return f"{self.user.first_name} {self.user.last_name} - AP: {self.available_points} points, LP: {self.locked_points} points"    
+        return f"{self.user.first_name} {self.user.last_name} - AP: {self.earned_points} points"
 
 
 # PointPurchase model represents a purchase of points by a customer.
@@ -39,28 +37,20 @@ class PointPurchase(UUIDModel, TimeStampedModel):
     customer = models.ForeignKey(
         "customers.CustomerProfile",
         on_delete=models.CASCADE,
-        related_name="point_purchases"
+        related_name="point_purchases",
     )
     money_amount = models.DecimalField(
-        max_digits=20,
-        decimal_places=2,
-        validators=[MinValueValidator(Decimal("0.00"))]
+        max_digits=20, decimal_places=2, validators=[MinValueValidator(Decimal("0.00"))]
     )
     points = models.PositiveIntegerField()
-    payment_reference = models.CharField(
-        max_length=100,
-        unique=True
-    )
+    payment_reference = models.CharField(max_length=100, unique=True)
     status = models.CharField(
         max_length=30,
         choices=PaymentStatus.choices,
         default=PaymentStatus.PENDING,
-        db_index=True
+        db_index=True,
     )
-    purchased_at = models.DateTimeField(
-        null=True,
-        blank=True
-    )
+    purchased_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.customer.fullname} bought {self.points} points"
@@ -69,29 +59,29 @@ class PointPurchase(UUIDModel, TimeStampedModel):
 # PointTransaction model represents a transaction of points in a user's PointWallet.
 class PointTransaction(UUIDModel, TimeStampedModel):
     wallet = models.ForeignKey(
-        PointWallet,
+        PointWallet, on_delete=models.CASCADE, related_name="point_transactions"
+    )
+    purchase = models.ForeignKey(
+        PointPurchase,
+        null=True,
+        blank=True,
         on_delete=models.CASCADE,
-        related_name="point_transactions"
+        related_name="transaction",
     )
     job = models.ForeignKey(
         "jobs.JobRequest",
         on_delete=models.CASCADE,
         null=True,
-        related_name="point_transaction"
+        related_name="point_transactions",
     )
-    points = models.PositiveIntegerField()
+    points = models.IntegerField()
     transaction_type = models.CharField(
-        max_length=30,
-        choices=TransactionType.choices,
-        db_index=True
+        max_length=30, choices=TransactionType.choices, db_index=True
     )
-    reference = models.CharField(
-        max_length=100,
-        unique=True
-    )
+    transaction_reference = models.CharField(max_length=100, unique=True)
 
     def __str__(self):
-        return f"{self.wallet.user.first_name} - {self.transaction_type}"
+        return f"{self.wallet.user.first_name} {self.wallet.user.last_name}'s Wallet >> {self.transaction_type.upper()} >> {self.points} points"
 
 
 # WithdrawalRequest model represents a request by a provider to withdraw points from their PointWallet.
@@ -99,23 +89,21 @@ class WithdrawalRequest(UUIDModel, TimeStampedModel):
     provider = models.ForeignKey(
         "providers.ProviderProfile",
         on_delete=models.CASCADE,
-        related_name="withdrawal_requests"
+        related_name="withdrawal_requests",
     )
-    points = models.PositiveIntegerField(
-        validators=[MinValueValidator(1)]
-    )
+    points = models.PositiveIntegerField(validators=[MinValueValidator(1)])
     status = models.CharField(
         max_length=30,
         choices=WithdrawalStatus.choices,
         default=WithdrawalStatus.PENDING,
-        db_index=True
+        db_index=True,
     )
     processed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         blank=True,
         null=True,
-        related_name="processed_withdrawal_request"
+        related_name="processed_withdrawal_request",
     )
     processed_at = models.DateTimeField(blank=True, null=True)
 

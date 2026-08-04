@@ -52,6 +52,7 @@ class TransactionType(models.TextChoices):
     PURCHASE = "purchase", "Purchase"
     LOCK = "lock", "Lock"
     UNLOCK = "unlock", "Unlock"
+    PROVIDER_PAY = "provider_pay", "Provider Pay"
     EARNED = "earned", "Earned"
     WITHDRAWAL = "withdrawal", "Withdrawal"
     REFUND = "refund", "Refund"

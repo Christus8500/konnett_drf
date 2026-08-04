@@ -1,20 +1,22 @@
 import random
+import secrets
 import string
+
+from django.utils import timezone
 
 from django.db.models import Avg
 
 def generate_reference(prefix="KNT"):
     """
-    Generate a random reference string with a given prefix.
+    Generates a unique Konnett reference.
 
-    Args:
-        prefix (str): The prefix to prepend to the reference string. Default is "REF".
-
-    Returns:
-        str: A randomly generated reference string.
+    Example:
+        KNT-20260804-9F8A3C7D
     """
-    random_string = ''.join(random.choices(string.ascii_uppercase + string.digits, k=10))
-    return f"{prefix}-{random_string}"
+    date = timezone.now().strftime("%Y%m%d")
+    random_part = secrets.token_hex(4).upper()
+
+    return f"KNT-{date}-{random_part}"
 
 
 def generate_random_code(length=6):

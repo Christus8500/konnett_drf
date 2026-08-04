@@ -11,6 +11,7 @@ from apps.core.models import UUIDModel, TimeStampedModel
 def job_request_image_upload(instance, filename):
     return f"jobs/{instance.job.id}/job_requests/{filename}"
 
+
 def job_completion_image_upload(instance, filename):
     return f"jobs/{instance.job.id}/job_completion/{filename}"
 
@@ -20,12 +21,10 @@ class JobRequest(UUIDModel, TimeStampedModel):
     customer = models.ForeignKey(
         "customers.CustomerProfile",
         on_delete=models.CASCADE,
-        related_name="job_requests"
+        related_name="job_requests",
     )
     category = models.ForeignKey(
-        "services.Category",
-        on_delete=models.CASCADE,
-        related_name="job_requests"
+        "services.Category", on_delete=models.CASCADE, related_name="job_requests"
     )
     title = models.CharField(max_length=255)
     description = models.TextField()
@@ -49,7 +48,7 @@ class JobRequest(UUIDModel, TimeStampedModel):
 
     # The save method is overridden to automatically set the completed_at field to the current time when the job status is changed to COMPLETED and completed_at is not already set.
     def save(self, *args, **kwargs):
-        if (self.status == JobRequestStatus.COMPLETED and self.completed_at is None):
+        if self.status == JobRequestStatus.COMPLETED and self.completed_at is None:
             self.completed_at = timezone.now()
         super().save(*args, **kwargs)
 
@@ -57,16 +56,11 @@ class JobRequest(UUIDModel, TimeStampedModel):
         return f"{self.title}, by {self.customer}"
 
 
-
 class JobRequestImage(UUIDModel):
     job = models.ForeignKey(
-        JobRequest,
-        on_delete=models.CASCADE,
-        related_name="job_request_images"
+        JobRequest, on_delete=models.CASCADE, related_name="job_request_images"
     )
-    image = models.ImageField(
-        upload_to=job_request_image_upload
-    )
+    image = models.ImageField(upload_to=job_request_image_upload)
 
     def __str__(self):
         return f"Image for {self.job}"
@@ -74,14 +68,12 @@ class JobRequestImage(UUIDModel):
 
 class JobCompletionImage(UUIDModel):
     job = models.ForeignKey(
-        JobRequest,
-        on_delete=models.CASCADE,
-        related_name="job_completion_images"
+        JobRequest, on_delete=models.CASCADE, related_name="job_completion_images"
     )
     provider = models.ForeignKey(
         "providers.ProviderProfile",
         on_delete=models.CASCADE,
-        related_name="job_completion_images"      
+        related_name="job_completion_images",
     )
     image = models.ImageField(upload_to=job_completion_image_upload)
 
@@ -91,22 +83,16 @@ class JobCompletionImage(UUIDModel):
 
 class JobRequestOffer(UUIDModel, TimeStampedModel):
     job = models.ForeignKey(
-        JobRequest,
-        on_delete=models.CASCADE,
-        related_name="job_offers"
+        JobRequest, on_delete=models.CASCADE, related_name="job_offers"
     )
     provider = models.ForeignKey(
-        "providers.ProviderProfile",
-        on_delete=models.CASCADE,
-        related_name="job_offers"
+        "providers.ProviderProfile", on_delete=models.CASCADE, related_name="job_offers"
     )
     status = models.CharField(
-        max_length=30,
-        choices=JobOfferStatus.choices,
-        default=JobOfferStatus.PENDING
+        max_length=30, choices=JobOfferStatus.choices, default=JobOfferStatus.PENDING
     )
 
-    # The Meta class defines a unique constraint to ensure that a provider can only make one offer per job. 
+    # The Meta class defines a unique constraint to ensure that a provider can only make one offer per job.
     # It also specifies the default ordering of JobRequestOffer instances by their creation date in descending order.
     class Meta:
         constraints = [
@@ -129,8 +115,9 @@ class JobDispute(UUIDModel):
     )
     customer_reason = models.TextField()
     admin_note = models.TextField(blank=True, null=True)
-    decision = models.CharField(max_length=20, choices=JobDisputeDecision.choices, 
-        blank=True, null=True)
+    decision = models.CharField(
+        max_length=20, choices=JobDisputeDecision.choices, blank=True, null=True
+    )
     resolved_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -147,5 +134,3 @@ class JobDispute(UUIDModel):
 
     def __str__(self):
         return f"Dispute - {self.job.title}"
-
-

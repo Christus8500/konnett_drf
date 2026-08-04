@@ -9,10 +9,26 @@ from rest_framework.filters import OrderingFilter, SearchFilter
 
 from apps.core.permissions import IsCustomer, IsCustomerOwner, IsVerifiedProvider
 from apps.core.choices import JobRequestStatus, JobOfferStatus, JobDisputeDecision
+
 from apps.jobs.models import JobRequest, JobRequestImage, JobRequestOffer, JobDispute
 from apps.jobs.mixins import JobRequestMixin, ProviderMixin
-from apps.jobs.serializers import JobRequestReadSerializer, JobRequestWriteSerializer, JobRequestImageSerializer, JobCompletionImageSerializer, JobRequestOfferSerializer, JobDisputeSerializer, AdminJobDisputeSerializer
+from apps.jobs.serializers import (
+    JobRequestReadSerializer,
+    JobRequestWriteSerializer,
+    JobRequestImageSerializer,
+    JobCompletionImageSerializer,
+    JobRequestOfferSerializer,
+    JobDisputeSerializer,
+    AdminJobDisputeSerializer,
+)
 from apps.jobs.filters import JobFilter
+
+from apps.konnett_points.services import (
+    pay_provider,
+    reserve_job_points,
+    adjust_reserved_points,
+    release_reserved_points,
+)
 
 # Create your views here.
 
@@ -28,20 +44,18 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
     search_fields = ["title", "description"]
     ordering_fields = ["created_at", "points_amount"]
 
-    #^ get_queryset retrieves the queryset of JobRequest instances based on the authenticated user's role.
+    # ^ get_queryset retrieves the queryset of JobRequest instances based on the authenticated user's role.
     # If the user is a staff member, all job requests are returned.
     # If the user is a customer, only their own job requests are returned.
     # If the user is a provider, only pending job requests are returned.
     def get_queryset(self):
-        queryset = (
-            JobRequest.objects.select_related(
-                "customer",
-                "category",
-            ).prefetch_related(
-                "job_request_images",
-                "job_completion_images",
-                "job_offers__provider",
-            )
+        queryset = JobRequest.objects.select_related(
+            "customer",
+            "category",
+        ).prefetch_related(
+            "job_request_images",
+            "job_completion_images",
+            "job_offers__provider",
         )
 
         user = self.request.user
@@ -53,13 +67,11 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
             return queryset.filter(status=JobRequestStatus.PENDING)
         return queryset.none()
 
-    #^ get_serializer_class returns the appropriate serializer class based on the action being performed.
     def get_serializer_class(self):
-        if self.action in ['create', 'partial_update']:
+        if self.action in ["create", "partial_update"]:
             return JobRequestWriteSerializer
         return JobRequestReadSerializer
 
-    #^ get_permissions returns the appropriate permissions based on the action being performed
     def get_permissions(self):
         if self.action in ["list", "retrieve"]:
             permission = IsCustomer | IsVerifiedProvider | IsAdminUser
@@ -68,28 +80,35 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
             return [IsCustomerOwner()]
         return [IsCustomer()]
 
+    @transaction.atomic
     def perform_create(self, serializer):
-        # TODO (Konnett Points):
-        # Check if the customer has enough available points.
-        #
-        # TODO (Konnett Points):
-        # Reserve (lock) the points for this job.
-        serializer.save(customer=self.request.user.customer_profile)
+        job = serializer.save(customer=self.request.user.customer_profile)
 
-    #^ partial_update updates a job request instance. 
-    # It ensures that the job is still pending before allowing the update. 
+        reserve_job_points(job)
+
+    # ^ partial_update updates a job request instance.
+    # It ensures that the job is still pending before allowing the update.
     # If the job is not pending, an error message is returned.
+    @transaction.atomic
     def partial_update(self, request, *args, **kwargs):
         job = self.get_object()
-        self.ensure_job_is_pending(
-            job,
-            "This job can no longer be edited."
-        )
-        return super().partial_update(request, *args, **kwargs)
+        self.ensure_job_is_pending(job, "This job can no longer be edited.")
 
-    #^ destroy cancels a job request instance.
-    # It ensures that the job is still pending or open before allowing the cancellation. 
+        old_points_amount = job.points_amount
+
+        response = super().partial_update(request, *args, **kwargs)
+
+        job.refresh_from_db(fields=["points_amount"])
+
+        if job.points_amount != old_points_amount:
+            adjust_reserved_points(job, old_points_amount)
+
+        return response
+
+    # ^ destroy cancels a job request instance.
+    # It ensures that the job is still pending or open before allowing the cancellation.
     # If the job is not in one of these states, an error message is returned.
+    @transaction.atomic
     def destroy(self, request, *args, **kwargs):
         job = self.get_object()
         self.ensure_job_is_pending_or_open(job)
@@ -97,9 +116,8 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
         job.status = JobRequestStatus.CANCELLED
         job.save(update_fields=["status"])
 
-        # TODO (Konnett Points):
-        # Release the reserved points back to the customer's
-        # available balance.
+        release_reserved_points(job, transaction_type=TransactionType.UNLOCK)
+
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -165,13 +183,11 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
         # Provider endpoint: /provider/offers/
         if "pk" not in self.kwargs:
             return (
-                JobRequestOffer.objects
-                .filter(
+                JobRequestOffer.objects.filter(
                     provider=self.request.user.provider_profile,
-                    job__status=JobRequestStatus.PENDING,
                 )
                 .select_related("provider", "job")
-                .order_by("-created_at")
+                .order_by("status", "-created_at")
             )
 
         # Customer endpoint: /jobs/<job_id>/offers/
@@ -179,12 +195,11 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
         self.check_job_owner(job)
 
         return (
-            JobRequestOffer.objects
-            .filter(job=job)
+            JobRequestOffer.objects.filter(job=job)
             .select_related("provider", "job")
             .order_by("-created_at")
         )
-    
+
     def create(self, request, *args, **kwargs):
         if "pk" not in self.kwargs:
             return Response(
@@ -194,8 +209,7 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
 
         job = self.get_job()
         self.ensure_job_is_pending_or_open(
-            job,
-            "This job is no longer accepting offers."
+            job, "This job is no longer accepting offers."
         )
 
         # Check if the provider has already submitted an offer for this job.
@@ -225,7 +239,7 @@ class JobOfferAcceptView(JobRequestMixin, ProviderMixin, generics.UpdateAPIView)
     queryset = JobRequestOffer.objects.select_related("job")
     permission_classes = [IsCustomer]
 
-    # transaction.atomic ensures that the entire operation is treated as a single transaction. 
+    # transaction.atomic ensures that the entire operation is treated as a single transaction.
     # If any part of the operation fails, the entire transaction will be rolled back, ensuring data integrity.
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
@@ -233,15 +247,9 @@ class JobOfferAcceptView(JobRequestMixin, ProviderMixin, generics.UpdateAPIView)
         job = offer.job
 
         self.check_job_owner(job)
-        self.ensure_job_is_open(
-            job,
-            "Offers can only be managed while the job is open"
-        )
+        self.ensure_job_is_open(job, "Offers can only be managed while the job is open")
 
-        self.ensure_offer_is_pending(
-            offer,
-            "This offer has already been processed."
-        )
+        self.ensure_offer_is_pending(offer, "This offer has already been processed.")
 
         offer.status = JobOfferStatus.ACCEPTED
         offer.save(update_fields=["status"])
@@ -251,9 +259,7 @@ class JobOfferAcceptView(JobRequestMixin, ProviderMixin, generics.UpdateAPIView)
             status=JobOfferStatus.PENDING,
         ).exclude(
             pk=offer.pk
-        ).update(
-            status=JobOfferStatus.REJECTED
-        )
+        ).update(status=JobOfferStatus.REJECTED)
 
         job.status = JobRequestStatus.IN_PROGRESS
         job.save(update_fields=["status"])
@@ -264,16 +270,13 @@ class JobOfferAcceptView(JobRequestMixin, ProviderMixin, generics.UpdateAPIView)
         # TODO:
         # Notify all rejected providers.
 
-        return Response(
-            {"detail": "Offer accepted."},
-            status=status.HTTP_200_OK
-        )
+        return Response({"detail": "Offer accepted."}, status=status.HTTP_200_OK)
 
 
 class JobOfferRejectView(JobRequestMixin, ProviderMixin, generics.UpdateAPIView):
     queryset = JobRequestOffer.objects.select_related("job")
     permission_classes = [IsCustomer]
-    
+
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
         offer = self.get_object()
@@ -285,10 +288,7 @@ class JobOfferRejectView(JobRequestMixin, ProviderMixin, generics.UpdateAPIView)
             "You can only reject offers while the job is open.",
         )
 
-        self.ensure_offer_is_pending(
-            offer,
-            "This offer has already been processed."
-        )
+        self.ensure_offer_is_pending(offer, "This offer has already been processed.")
 
         offer.status = JobOfferStatus.REJECTED
         offer.save(update_fields=["status"])
@@ -312,15 +312,9 @@ class JobOfferWithdrawView(ProviderMixin, JobRequestMixin, generics.UpdateAPIVie
         job = offer.job
 
         self.check_offer_owner(offer)
-        self.ensure_job_is_open(
-            job,
-            "You can only withdraw offers from open jobs."
-        )
+        self.ensure_job_is_open(job, "You can only withdraw offers from open jobs.")
 
-        self.ensure_offer_is_pending(
-            offer,
-            "Only pending offers can be withdrawn."
-        )
+        self.ensure_offer_is_pending(offer, "Only pending offers can be withdrawn.")
 
         offer.status = JobOfferStatus.WITHDRAWN
         offer.save(update_fields=["status"])
@@ -331,7 +325,9 @@ class JobOfferWithdrawView(ProviderMixin, JobRequestMixin, generics.UpdateAPIVie
         )
 
 
-class JobCompletionImageCreateView(JobRequestMixin, ProviderMixin, generics.CreateAPIView):
+class JobCompletionImageCreateView(
+    JobRequestMixin, ProviderMixin, generics.CreateAPIView
+):
     serializer_class = JobCompletionImageSerializer
     permission_classes = [IsVerifiedProvider]
 
@@ -340,8 +336,7 @@ class JobCompletionImageCreateView(JobRequestMixin, ProviderMixin, generics.Crea
         job = self.get_job()
 
         self.ensure_job_is_in_progress(
-            job,
-            "Completion images can only be uploaded while the job is in progress."
+            job, "Completion images can only be uploaded while the job is in progress."
         )
 
         offer = self.check_accepted_provider(job)
@@ -368,8 +363,7 @@ class JobRequestCompletionView(JobRequestMixin, ProviderMixin, generics.UpdateAP
         job = self.get_job()
 
         self.ensure_job_is_in_progress(
-            job,
-            "Only the jobs in progress can request completion"
+            job, "Only the jobs in progress can request completion"
         )
         self.check_accepted_provider(job)
 
@@ -389,11 +383,7 @@ class JobRequestCompletionView(JobRequestMixin, ProviderMixin, generics.UpdateAP
         job.save(update_fields=["status"])
 
         return Response(
-            {
-                "detail": (
-                    "Completion request sent successfully."
-                )
-            },
+            {"detail": ("Completion request sent successfully.")},
             status=status.HTTP_200_OK,
         )
 
@@ -407,13 +397,10 @@ class JobConfirmCompletionView(JobRequestMixin, generics.UpdateAPIView):
 
         self.check_job_owner(job)
         self.ensure_job_is_awaiting_confirmation(
-            job,
-            "Only the jobs awaiting completion can be completed"
+            job, "Only the jobs awaiting completion can be completed"
         )
 
-        offer = JobRequestOffer.objects.select_related(
-            "provider"
-        ).get(
+        offer = JobRequestOffer.objects.select_related("provider__user").get(
             job=job,
             status=JobOfferStatus.ACCEPTED,
         )
@@ -421,17 +408,10 @@ class JobConfirmCompletionView(JobRequestMixin, generics.UpdateAPIView):
         job.status = JobRequestStatus.COMPLETED
         job.save(update_fields=["status"])
 
-        # TODO (Konnett Points):
-        # Transfer the reserved points from the customer's
-        # PointAccount to the accepted provider's PointAccount.
-
-        # TODO (Konnett Points):
-        # Create a PointTransaction record for both
-        # customer and provider.
+        pay_provider(job, offer)
 
         offer.provider.completed_jobs = F("completed_jobs") + 1
         offer.provider.save(update_fields=["completed_jobs"])
-        offer.provider.refresh_from_db()
 
         return Response(
             {"detail": "Job completed successfully."},
@@ -450,8 +430,7 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
         self.check_job_owner(job)
 
         self.ensure_job_is_awaiting_confirmation(
-            job,
-            "Only the jobs awaiting confirmation can be disputed."
+            job, "Only the jobs awaiting confirmation can be disputed."
         )
 
         # Check if a dispute already exists for this job.
@@ -526,12 +505,7 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
         if dispute.decision == JobDisputeDecision.REFUND_POINTS:
             job.status = JobRequestStatus.CANCELLED
 
-            # TODO (Konnett Points):
-            # Refund the reserved points
-            # back to the customer.
-
-            # TODO (Konnett Points):
-            # Create PointTransaction records.
+            release_reserved_points(job, transaction_type=TransactionType.REFUND)
 
             # TODO:
             # Notify customer and provider.
@@ -539,12 +513,15 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
         elif dispute.decision == JobDisputeDecision.RELEASE_POINTS:
             job.status = JobRequestStatus.COMPLETED
 
-            # TODO (Konnett Points):
-            # Transfer the reserved points
-            # to the provider.
+            offer = JobRequestOffer.objects.select_related("provider__user").get(
+                job=job,
+                status=JobOfferStatus.ACCEPTED,
+            )
 
-            # TODO (Konnett Points):
-            # Create PointTransaction records.
+            pay_provider(job, offer)
+
+            offer.provider.completed_jobs = F("completed_jobs") + 1
+            offer.provider.save(update_fields=["completed_jobs"])
 
             # TODO:
             # Notify customer and provider.
