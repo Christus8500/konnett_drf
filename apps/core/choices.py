@@ -43,7 +43,7 @@ class JobDisputeDecision(models.TextChoices):
 # Choices for payment status
 class PaymentStatus(models.TextChoices):
     PENDING = "pending", "Pending"
-    SUCCESS = "success", "Success"
+    SUCCESSFUL = "successful", "Successful"
     FAILED = "failed", "Failed"
 
 

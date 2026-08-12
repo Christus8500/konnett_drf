@@ -23,7 +23,7 @@ from apps.jobs.serializers import (
 )
 from apps.jobs.filters import JobFilter
 
-from apps.konnett_points.services import (
+from apps.konnett_points.utils import (
     pay_provider,
     reserve_job_points,
     adjust_reserved_points,
@@ -201,6 +201,8 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
         )
 
     def create(self, request, *args, **kwargs):
+        # Provider's get request doesn't have ajob_id
+        # This disables the provider from sending a post request w/o including a job_id
         if "pk" not in self.kwargs:
             return Response(
                 {"detail": "Offers can only be created for a specific job."},
@@ -423,8 +425,9 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
     serializer_class = JobDisputeSerializer
     permission_classes = [IsCustomer]
 
-    # create handles the creation of a new dispute for a specific job.
+    # create() handles the creation of a new dispute for a specific job.
     # It ensures that the job is still awaiting confirmation before allowing the creation of a dispute.
+    @transaction.atomic
     def create(self, request, *args, **kwargs):
         job = self.get_job()
         self.check_job_owner(job)

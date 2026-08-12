@@ -2,6 +2,7 @@ import uuid
 
 from django.db import models
 
+
 # Create your models here.
 # TimeStampedModel: An abstract base model that provides created_at and updated_at fields to track the creation and modification timestamps of model instances.
 class TimeStampedModel(models.Model):

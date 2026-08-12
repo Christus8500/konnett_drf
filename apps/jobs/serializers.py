@@ -3,7 +3,9 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from apps.providers.models import ProviderProfile
+
 from apps.services.models import Category
+
 from apps.jobs.models import (
     JobRequest,
     JobRequestImage,
@@ -93,6 +95,7 @@ class JobRequestReadSerializer(serializers.ModelSerializer):
             "points_amount",
             "deadline",
             "job_address",
+            "job_address_2",
             "city",
             "state",
             "status",
@@ -118,6 +121,7 @@ class JobRequestWriteSerializer(serializers.ModelSerializer):
             "points_amount",
             "deadline",
             "job_address",
+            "job_address_2",
             "city",
             "state",
         ]

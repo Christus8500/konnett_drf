@@ -1,6 +1,6 @@
 @baseUrl = http://localhost:8000
-@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg1ODQwMDI5LCJpYXQiOjE3ODU4MzgyMjksImp0aSI6IjJlNjlhM2Q3NDMzZTQ1YWRiMDY0YzNmOTMxZTNlY2YyIiwidXNlcl9pZCI6IjUwOWJlNDAyLTA1NTgtNDAwZS05NDNmLTc0ZTgyYmY1YzY2ZSJ9.TVxH7KnG2oubR4GtRgCF-5eh_AnJ00II_IXv2CdwLNo
-@refreshToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc4NjQ0MzAyOSwiaWF0IjoxNzg1ODM4MjI5LCJqdGkiOiJjNTVjYTU0YjBlMGQ0YTc3ODhjZTBkMDA0NzYxYjgyZSIsInVzZXJfaWQiOiI1MDliZTQwMi0wNTU4LTQwMGUtOTQzZi03NGU4MmJmNWM2NmUifQ.MJKRcVhoE01PghqXll6bIt7Ku_CjgaY-1yWHEyCirYQ
+@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg2NTc5MDcwLCJpYXQiOjE3ODY1NzcyNzAsImp0aSI6ImVjM2NkZDhkMjMyNjRiNGY5M2VkYTY0MmJiMGI3Y2QzIiwidXNlcl9pZCI6IjUwOWJlNDAyLTA1NTgtNDAwZS05NDNmLTc0ZTgyYmY1YzY2ZSJ9.fAUqe_Rd4JFos1N-AbWMlhkFwVFv7GjRD9gZ9yycNmA
+@refreshToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc4NzE4MjA3MCwiaWF0IjoxNzg2NTc3MjcwLCJqdGkiOiIxOWI2ZmZlMmI0Yjk0MTg0ODdmZTllYTc2OTY1MjI2OCIsInVzZXJfaWQiOiI1MDliZTQwMi0wNTU4LTQwMGUtOTQzZi03NGU4MmJmNWM2NmUifQ.g7tKiyj8DWBdTADJIHoNMRmUCOuMhL4DBSsub-klmxM
 
 ###
 # Login
@@ -24,15 +24,14 @@ Content-Type: application/json
 
 
 ###
-# Get Customer Profile 
-#The lookup field and kwarg is the customer's user_id
-GET {{baseUrl}}/api/customers/profile/509be402-0558-400e-943f-74e82bf5c66e/
+# Get logged in Customer Profile 
+GET {{baseUrl}}/api/customers/profile/
 Authorization: Bearer {{accessToken}}
 
 ###
-# Update Customer Profile
+# Update logged in Customer Profile
 # Can also update: Phone_no, first_name and last_name
-PATCH {{baseUrl}}/api/customers/profile/509be402-0558-400e-943f-74e82bf5c66e/
+PATCH {{baseUrl}}/api/customers/profile/
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 

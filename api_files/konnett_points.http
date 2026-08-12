@@ -1,0 +1,74 @@
+@baseUrl = http://localhost:8000
+
+@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg2NTc3MDU2LCJpYXQiOjE3ODY1NzUyNTcsImp0aSI6IjFlMDk0NGNhODM4YTQyMzY4ZmNmMWQzODE2MDE5OWVmIiwidXNlcl9pZCI6IjcxZGQ4OGViLWJiNDEtNGQ1Yy1hODA2LTI4OGQ1YjUwYmQ4ZSJ9.7bh_dICU-orBtGVRg0LT3iw0gUfJeHbbn0ctWtdet5I
+
+###
+# Get logged in user's wallet
+GET {{baseUrl}}/api/konnett_points/wallet/
+Authorization: Bearer {{accessToken}}
+
+
+###
+# Get logged in user's wallet transactions
+GET {{baseUrl}}/api/konnett_points/transactions/
+Authorization: Bearer {{accessToken}}
+
+
+###
+# Create a purchase record for the looged user
+POST {{baseUrl}}/api/konnett_points/purchase/
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+    "money_amount": "1000"
+}
+
+
+###
+# Webhook URL
+POST {{baseUrl}}/api/konnett_points/verify/
+Content-Type: application/json
+
+{
+    "status": "successful",
+    "txRef": "KNTPUR-20260807-2BE8334E",
+    "amount": 600,
+    "createdAt": "2026-09-20T22:02:54.000Z"
+}
+
+
+###
+# Create withdrawal request
+# Only by a provider
+POST {{baseUrl}}/api/konnett_points/withdrawals/
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+    "points": "1200"
+}
+
+
+###
+# Get withdrawal request (Only by provider or admin)
+# Admin gets all but providers get theirs
+GET {{baseUrl}}/api/konnett_points/withdrawals
+Authorization: Bearer {{accessToken}}
+###
+GET {{baseUrl}}/api/konnett_points/withdrawals/b16effa1-6d14-46f2-a8a7-48ef0c18e7f1/
+Authorization: Bearer {{accessToken}}
+
+
+
+###
+# Approve withdrawal request (Only by admin)
+PATCH {{baseUrl}}/api/konnett_points/withdrawals/b16effa1-6d14-46f2-a8a7-48ef0c18e7f1/approve/
+Authorization: Bearer {{accessToken}}
+
+
+###
+# Reject withdrawal request (Only by admin)
+PATCH {{baseUrl}}/api/konnett_points/withdrawals/20fb49a4-98bd-413a-9cd0-0eca7add95e4/reject/
+Authorization: Bearer {{accessToken}}
+

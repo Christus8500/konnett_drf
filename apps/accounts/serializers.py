@@ -4,6 +4,7 @@ from rest_framework import serializers
 from apps.accounts.models import User
 from apps.accounts.validators import validate_password
 
+
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(
         write_only=True,
@@ -47,8 +48,8 @@ class RegisterSerializer(serializers.ModelSerializer):
                 {"confirm_password": "Passwords do not match."}
             )
         return attrs
-    
-    #Extracting password and confirm_password from validated_data, creating a new user instance, setting the password, and saving the user to the database. 
+
+    # Extracting password and confirm_password from validated_data, creating a new user instance, setting the password, and saving the user to the database.
     # Finally, returning the created user instance.
     def create(self, validated_data):
         validated_data.pop("confirm_password")
@@ -59,7 +60,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         user.save()
 
         return user
-    
+
 
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
@@ -68,7 +69,7 @@ class LoginSerializer(serializers.Serializer):
         style={"input_type": "password"},
     )
 
-    #Overriding validate() to authenticate the user using the provided email and password. 
+    # Overriding validate() to authenticate the user using the provided email and password.
     # If authentication fails, a validation error is raised. If successful, the authenticated user is added to the validated data.
     def validate(self, attrs):
         email = attrs.get("email")

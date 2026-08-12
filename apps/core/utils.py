@@ -6,6 +6,7 @@ from django.utils import timezone
 
 from django.db.models import Avg
 
+
 def generate_reference(prefix="KNT"):
     """
     Generates a unique Konnett reference.
@@ -16,7 +17,7 @@ def generate_reference(prefix="KNT"):
     date = timezone.now().strftime("%Y%m%d")
     random_part = secrets.token_hex(4).upper()
 
-    return f"KNT-{date}-{random_part}"
+    return f"{prefix}-{date}-{random_part}"
 
 
 def generate_random_code(length=6):
@@ -29,7 +30,7 @@ def generate_random_code(length=6):
     Returns:
         str: A randomly generated alphanumeric code.
     """
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+    return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
 
 def calculate_average_rating(queryset):
@@ -42,4 +43,4 @@ def calculate_average_rating(queryset):
     Returns:
         float: The average value of the specified field, or None if the queryset is empty.
     """
-    return queryset.aggregate(average=Avg('rating'))['average'] or 0
+    return queryset.aggregate(average=Avg("rating"))["average"] or 0

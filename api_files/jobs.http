@@ -1,7 +1,6 @@
 @baseUrl = http://localhost:8000
-@customerAccessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg1ODQwMDI5LCJpYXQiOjE3ODU4MzgyMjksImp0aSI6IjJlNjlhM2Q3NDMzZTQ1YWRiMDY0YzNmOTMxZTNlY2YyIiwidXNlcl9pZCI6IjUwOWJlNDAyLTA1NTgtNDAwZS05NDNmLTc0ZTgyYmY1YzY2ZSJ9.TVxH7KnG2oubR4GtRgCF-5eh_AnJ00II_IXv2CdwLNo
-@providerAccessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg1ODQxMDI1LCJpYXQiOjE3ODU4MzkyMjUsImp0aSI6ImVlZDhhOWZhMjMwNzRkMTliNjg3ZDNhYjNiZjhmNWE0IiwidXNlcl9pZCI6IjcxZGQ4OGViLWJiNDEtNGQ1Yy1hODA2LTI4OGQ1YjUwYmQ4ZSJ9.o1QKR5f8_iaBW5pEeBbixPIMda1GJA-hGh4w6cj_u5Y
-@refreshToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc4NTUzNDMxMSwiaWF0IjoxNzg0OTI5NTExLCJqdGkiOiI5ZDAzYTYzOGFhOTU0YjM2OWQ3YWRlNTMwZTIzNzlmMSIsInVzZXJfaWQiOiI1MDliZTQwMi0wNTU4LTQwMGUtOTQzZi03NGU4MmJmNWM2NmUifQ.SztVWxbE6qJrqihpSgu1_8Xqf2i1ftjzWeeWA36kigI
+@customerAccessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg2NTc5MDcwLCJpYXQiOjE3ODY1NzcyNzAsImp0aSI6ImVjM2NkZDhkMjMyNjRiNGY5M2VkYTY0MmJiMGI3Y2QzIiwidXNlcl9pZCI6IjUwOWJlNDAyLTA1NTgtNDAwZS05NDNmLTc0ZTgyYmY1YzY2ZSJ9.fAUqe_Rd4JFos1N-AbWMlhkFwVFv7GjRD9gZ9yycNmA
+@providerAccessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg2NTc4ODYzLCJpYXQiOjE3ODY1NzcwNjMsImp0aSI6IjhiZDdkZGM0OGI1MzQ4NTZiMTc3YmQ5Y2E5NWY2NmQzIiwidXNlcl9pZCI6IjcxZGQ4OGViLWJiNDEtNGQ1Yy1hODA2LTI4OGQ1YjUwYmQ4ZSJ9.2FLuoLqXwTEaCs-VkF3phj8uIYSyYjP4VvCtbCII-Tg
 
 
 ####################### JOB REQUESTS ########################
@@ -14,12 +13,12 @@ Authorization: Bearer {{customerAccessToken}}
     "category": "93664e8e-6314-4212-ae17-5f369ffa02d4",
     "title": "Get My Waybill",
     "description": "lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed euismod, nunc ut aliquam aliquam",
-    "points_amount": "500",
-    "deadline": "2026-08-05T14:30:00Z",
-    "job_address": "26 Oguta Road",
+    "points_amount": "600",
+    "deadline": "2026-09-05T14:30:00Z",
+    "job_address": "16 kano str. Main Mkt, Onitsha, Anambra State",
+    "job_address_2": "26 Oguta Road",
     "city": "Onitsha",
     "state": "Anambra"
-
 }
 
 ###
@@ -28,7 +27,7 @@ Authorization: Bearer {{customerAccessToken}}
 # Customers can only get their jobs
 # Providers can only get jobs that are pending
 GET {{baseUrl}}/api/jobs/
-Authorization: Bearer {{providerAccessToken}}
+Authorization: Bearer {{customerAccessToken}}
 
 ########### Searches ##########
 GET {{baseUrl}}/api/jobs/?search=Take+me+to+school
@@ -46,12 +45,12 @@ Authorization: Bearer {{customerAccessToken}}
 ###
 # Update A Job
 # Customers can only update their jobs, if the job is still pending
-PATCH {{baseUrl}}/api/jobs/45ace3ac-f16e-419c-8b67-8ab8a89f28aa/
+PATCH {{baseUrl}}/api/jobs/3771e67a-dc3c-4ece-9231-8af1919f1019/
 Content-Type: application/json
 Authorization: Bearer {{customerAccessToken}}
 
 {
-    "points_amount": "600"
+    "points_amount": "500"
 }
 
 ###
@@ -164,18 +163,4 @@ Content-Type: application/json
 {
     "admin_note": "The work looks fine to me",
     "decision": "release points"
-}
-
-
-
-
-
-
-###
-# Refresh Token
-POST {{baseUrl}}/api/accounts/token/refresh/
-Content-Type: application/json
-
-{
-    "refresh": "{{refreshToken}}"
 }

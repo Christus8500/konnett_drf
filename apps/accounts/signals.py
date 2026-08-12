@@ -26,6 +26,5 @@ def create_user_profile_and_wallet(sender, instance, created, **kwargs):
 
     elif instance.role == UserRole.PROVIDER:
         ProviderProfile.objects.create(
-            user=instance,
-            business_name=f'{instance.first_name} {instance.last_name}'
+            user=instance, business_name=f"{instance.first_name} {instance.last_name}"
         )

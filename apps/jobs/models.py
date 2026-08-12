@@ -32,6 +32,7 @@ class JobRequest(UUIDModel, TimeStampedModel):
     deadline = models.DateTimeField(blank=True, null=True)
 
     job_address = models.TextField()
+    job_address_2 = models.TextField(blank=True, null=True)
     city = models.CharField(max_length=255)
     state = models.CharField(max_length=255)
 

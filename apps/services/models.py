@@ -6,12 +6,10 @@ from apps.core.models import UUIDModel
 
 # Create your models here.
 
+
 # Category model representing a category of services, with a unique name and slug.
 class Category(UUIDModel):
-    name = models.CharField(
-        max_length=100,
-        unique=True
-    )
+    name = models.CharField(max_length=100, unique=True)
     slug = models.SlugField(max_length=255, unique=True, blank=True)
 
     # Override the save method to automatically generate a unique slug based on the category name.
@@ -35,14 +33,10 @@ class Category(UUIDModel):
 # Service model representing a service offered by a provider, linked to a category.
 class Service(UUIDModel):
     provider = models.ForeignKey(
-        "providers.ProviderProfile",
-        on_delete=models.CASCADE,
-        related_name="services"
+        "providers.ProviderProfile", on_delete=models.CASCADE, related_name="services"
     )
     category = models.ForeignKey(
-        Category,
-        on_delete=models.CASCADE,
-        related_name="services"
+        Category, on_delete=models.CASCADE, related_name="services"
     )
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)

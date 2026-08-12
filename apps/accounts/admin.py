@@ -5,5 +5,5 @@ from apps.accounts.models import User
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
     list_display = ("email", "role")
-    list_filter = ("role",)
-    search_fields = ("email",)
+    list_filter = ("role", "is_active")
+    search_fields = ("email", "phone_number")

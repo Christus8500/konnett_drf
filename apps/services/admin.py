@@ -1,8 +1,12 @@
 from django.contrib import admin
 from apps.services.models import Category, Service
 
+
 # Register your models here.
-admin.site.register(Category)
+@admin.register(Category)
+class CategoryAdmin(admin.ModelAdmin):
+    search_fields = ("name",)
+
 
 @admin.register(Service)
 class ProviderServiceAdmin(admin.ModelAdmin):
@@ -10,8 +14,8 @@ class ProviderServiceAdmin(admin.ModelAdmin):
     search_fields = ("title",)
     list_filter = ("category__name", "is_active")
 
-    #^^ When the app grows and there are many services, 
-    #^^ it is better to use select_related to reduce the number of queries made to the database.
+    # ^^ When the app grows and there are many services,
+    # ^^ it is better to use select_related to reduce the number of queries made to the database.
     # search_fields = (
     #     "title",
     #     "provider__user__first_name",

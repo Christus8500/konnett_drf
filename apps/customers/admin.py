@@ -5,4 +5,4 @@ from apps.customers.models import *
 @admin.register(CustomerProfile)
 class CustomerProfileAdmin(admin.ModelAdmin):
     list_display = ("id", "fullname")
-    search_fields = ("user__email",)
+    search_fields = ("user__email", "fullname")

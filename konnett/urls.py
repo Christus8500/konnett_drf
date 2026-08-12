@@ -33,6 +33,7 @@ urlpatterns = [
     path('api/providers/', include('apps.providers.urls')),
     path('api/services/', include('apps.services.urls')),
     path('api/jobs/', include('apps.jobs.urls')),
+    path('api/konnett_points/', include('apps.konnett_points.urls')),
 
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),

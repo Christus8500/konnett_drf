@@ -27,7 +27,7 @@ class IsOwner(BasePermission):
         if not request.user or not request.user.is_authenticated:
             return False
         return obj.user == request.user
-    
+
 
 class IsCustomer(BasePermission):
     """
@@ -40,18 +40,19 @@ class IsCustomer(BasePermission):
             and request.user.is_authenticated
             and request.user.role == "customer"
         )
-    
+
 
 class IsCustomerOwner(BasePermission):
     """
     Allows access only to the owner of a customer instance.
     """
+
     def has_object_permission(self, request, view, obj):
         if not request.user.is_authenticated:
             return False
 
         return obj.customer.user == request.user
-    
+
 
 class IsProvider(BasePermission):
     """
@@ -64,23 +65,25 @@ class IsProvider(BasePermission):
             and request.user.is_authenticated
             and request.user.role == "provider"
         )
-    
+
 
 class IsProviderOwner(BasePermission):
     """
     Allows access only to the owner of a provider instance.
     """
+
     def has_object_permission(self, request, view, obj):
         if not request.user.is_authenticated:
             return False
 
         return obj.provider.user == request.user
-    
+
 
 class IsVerifiedProvider(BasePermission):
     """
     Allows access only verified provider.
     """
+
     message = "Only verified providers can perform this action."
 
     def has_permission(self, request, view):

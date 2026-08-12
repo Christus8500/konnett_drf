@@ -2,7 +2,7 @@ import re
 from rest_framework import serializers
 
 
-#Validating password strength based on length, uppercase, lowercase, number, and special character requirements.
+# Validating password strength based on length, uppercase, lowercase, number, and special character requirements.
 def validate_password(password):
     if len(password) < 8:
         raise serializers.ValidationError(
@@ -20,9 +20,7 @@ def validate_password(password):
         )
 
     if not re.search(r"\d", password):
-        raise serializers.ValidationError(
-            "Password must contain at least one number."
-        )
+        raise serializers.ValidationError("Password must contain at least one number.")
 
     if not re.search(r"[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>/?`~]", password):
         raise serializers.ValidationError(

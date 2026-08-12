@@ -1,46 +1,36 @@
+from django.db.models import Q
 from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 
-from apps.core.permissions import IsOwner, IsOwnerOrAdmin, IsProviderOwner
+from apps.core.permissions import IsProvider
 from apps.core.choices import ProviderVerificationStatus
-from apps.providers.models import ProviderProfile, ProviderVerification
-from apps.providers.serializers import ProviderProfileSerializer, ProviderVerificationSerializer
+
+from apps.providers.models import ProviderVerification
+from apps.providers.serializers import (
+    ProviderProfileSerializer,
+    ProviderVerificationSerializer,
+)
 
 # Create your views here.
 
+
 # View for retrieving and updating the ProviderProfile instance associated with a specific user.
 class ProviderProfileView(generics.RetrieveUpdateAPIView):
-    queryset = ProviderProfile.objects.select_related('user')
     serializer_class = ProviderProfileSerializer
-
-    #Using the provider's user_id for lookup
-    lookup_field = "user_id"
-    lookup_url_kwarg = "user_id"
-
-    #Allow only fetch and update
+    permission_classes = [IsProvider]
     http_method_names = ["get", "patch"]
 
-    #Overriding get_permissions(): Admin can fetch any provider profile, but only the owner can update their own profile.
-    def get_permissions(self):
-        self.permission_classes = [IsOwnerOrAdmin]
-        if self.request.method == 'PATCH':
-            self.permission_classes = [IsOwner]
-        return super().get_permissions()
-    
+    def get_object(self):
+        return self.request.user.provider_profile
+
 
 # View for retrieving and updating the ProviderVerification instance associated with a specific provider.
 class ProviderVerificationView(generics.RetrieveUpdateAPIView):
-    queryset = ProviderVerification.objects.select_related("provider", "provider__user")
     serializer_class = ProviderVerificationSerializer
-
-    #Using the provider_id for lookup
-    lookup_field = "provider__id"
-    lookup_url_kwarg = "provider_id"
-
-    #Allow only fetch and update
+    permission_classes = [IsProvider]
     http_method_names = ["get", "patch"]
 
     def perform_update(self, serializer):
@@ -51,12 +41,18 @@ class ProviderVerificationView(generics.RetrieveUpdateAPIView):
 
         serializer.save()
 
-    def get_permissions(self):
-        if self.request.method == "PATCH":
-            self.permission_classes = [IsProviderOwner]
-        else:
-            self.permission_classes = [IsAdminUser | IsProviderOwner]
-        return super().get_permissions()
+    def get_object(self):
+        return self.request.user.provider_profile.provider_verification
+
+
+class AdminProviderVerificationsView(generics.ListAPIView):
+    queryset = (
+        ProviderVerification.objects.select_related("provider", "provider__user")
+        .filter(status=ProviderVerificationStatus.PENDING)
+        .filter((Q(id_document__isnull=False) & ~Q(id_document="")))
+    )
+    serializer_class = ProviderVerificationSerializer
+    permission_classes = [IsAdminUser]
 
 
 # API view for updating the verification status of a provider. This view is restricted to admin users only.
@@ -82,7 +78,7 @@ def update_provider_verification_status(request, provider_id):
     if (
         verification.provider.is_verified
         and verification_status == ProviderVerificationStatus.VERIFIED
-    ):  
+    ):
         return Response(
             {"detail": "This provider is already verified."},
             status=status.HTTP_400_BAD_REQUEST,
@@ -99,4 +95,3 @@ def update_provider_verification_status(request, provider_id):
         },
         status=status.HTTP_200_OK,
     )
-    

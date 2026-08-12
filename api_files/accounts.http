@@ -1,6 +1,6 @@
 @baseUrl = http://localhost:8000
-@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg1MjQxNDE5LCJpYXQiOjE3ODUyMzk2MTksImp0aSI6Ijk1YTRhMTFlMjA5MDRjYTZhM2Q4YTk2OGEyNDAwZjIxIiwidXNlcl9pZCI6ImNiNzc5NjY2LTcxNzctNDdkNS04OTkyLWFlYzQxNzZiNTliMCJ9.SITbDX15E1olX06cMDn76Jau_nsdC9U44TKcnls46Bo
-@refreshToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc4NTg0NDQxOSwiaWF0IjoxNzg1MjM5NjE5LCJqdGkiOiJkY2NhNjc4MmMyM2I0NzhkYmU1ZWZlNzgyZWRmZGMzZSIsInVzZXJfaWQiOiJjYjc3OTY2Ni03MTc3LTQ3ZDUtODk5Mi1hZWM0MTc2YjU5YjAifQ.86PO0xoxD1BrVOXwGEuysoCqJVRxwbPBGX-wRVmh__s
+@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg2NTc4Mjc5LCJpYXQiOjE3ODY1NzY0NzksImp0aSI6ImQwODRiY2Y1MDgwMDQ4ZjJhNTFmZjZlY2ZiNjBkY2I2IiwidXNlcl9pZCI6ImNiNzc5NjY2LTcxNzctNDdkNS04OTkyLWFlYzQxNzZiNTliMCJ9.kaz9chQEsFJbw4J1cGBk_YWSBUmL3Kp_ebX1eJwlPdo
+@refreshToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc4NzE4MTI3OSwiaWF0IjoxNzg2NTc2NDc5LCJqdGkiOiI1NGY5MTRjOGYxNzg0NjVmYjU0N2ZjMDM4MjhlNWFiMCIsInVzZXJfaWQiOiJjYjc3OTY2Ni03MTc3LTQ3ZDUtODk5Mi1hZWM0MTc2YjU5YjAifQ.QSbz8aT2EaGir36GZvmCcdVua55-tujjeYU0adhUdXk
 
 ###
 # Login
@@ -11,6 +11,20 @@ Content-Type: application/json
     "email": "konnettuser@gmail.com",
     "password": "konnett$2500"
 }
+
+###
+# Refresh Token
+POST {{baseUrl}}/api/accounts/token/refresh/
+Content-Type: application/json
+
+{
+    "refresh": "{{refreshToken}}"
+}
+
+###
+# Users list (Only admin)
+GET {{baseUrl}}/api/accounts/users/
+Authorization: Bearer {{accessToken}}
 
 ###
 # Register Customer
@@ -56,12 +70,3 @@ Content-Type: application/json
 # Me
 GET {{baseUrl}}/api/accounts/me/
 Authorization: Bearer {{accessToken}}
-
-###
-# Refresh Token
-POST {{baseUrl}}/api/accounts/token/refresh/
-Content-Type: application/json
-
-{
-    "refresh": "{{refreshToken}}"
-}

@@ -1,8 +1,8 @@
 @baseUrl = http://localhost:8000
 
-@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg1ODQxMDI1LCJpYXQiOjE3ODU4MzkyMjUsImp0aSI6ImVlZDhhOWZhMjMwNzRkMTliNjg3ZDNhYjNiZjhmNWE0IiwidXNlcl9pZCI6IjcxZGQ4OGViLWJiNDEtNGQ1Yy1hODA2LTI4OGQ1YjUwYmQ4ZSJ9.o1QKR5f8_iaBW5pEeBbixPIMda1GJA-hGh4w6cj_u5Y
+@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg2NTc4ODYzLCJpYXQiOjE3ODY1NzcwNjMsImp0aSI6IjhiZDdkZGM0OGI1MzQ4NTZiMTc3YmQ5Y2E5NWY2NmQzIiwidXNlcl9pZCI6IjcxZGQ4OGViLWJiNDEtNGQ1Yy1hODA2LTI4OGQ1YjUwYmQ4ZSJ9.2FLuoLqXwTEaCs-VkF3phj8uIYSyYjP4VvCtbCII-Tg
 
-@refreshToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc4NjQ0NDAyNSwiaWF0IjoxNzg1ODM5MjI1LCJqdGkiOiI0MjRiYjVlYmFkNzI0OWIxYThiMmU3YWYzMTY1Yzc0NyIsInVzZXJfaWQiOiI3MWRkODhlYi1iYjQxLTRkNWMtYTgwNi0yODhkNWI1MGJkOGUifQ.dfbV_Vov0G2FxWKTLpohWu6sseT_uMM8bfxsRcbdusw
+@refreshToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc4NzE4MTg2MywiaWF0IjoxNzg2NTc3MDYzLCJqdGkiOiI1ZmU1NjQ3NDQxZjU0NjU4OWJjM2Q0YjQ0NjNkMTA4NyIsInVzZXJfaWQiOiI3MWRkODhlYi1iYjQxLTRkNWMtYTgwNi0yODhkNWI1MGJkOGUifQ.WTAAgJ59TkdpJq0K9of3XzC94IRoDw9rPRJxZkGcgUE
 
 ###
 # Login
@@ -28,36 +28,32 @@ Content-Type: application/json
 ###
 # Get Provider Profile 
 #The lookup field and kwarg is the provider's user_id
-GET {{baseUrl}}/api/providers/profile/71dd88eb-bb41-4d5c-a806-288d5b50bd8e/
+GET {{baseUrl}}/api/providers/profile/
 Authorization: Bearer {{accessToken}}
 
 ###
 # Update Provider Profile
 #The lookup field and kwarg is the provider's user_id
 # Can also update: Phone_no, first_name and last_name
-PATCH {{baseUrl}}/api/providers/profile/71dd88eb-bb41-4d5c-a806-288d5b50bd8e/
+PATCH {{baseUrl}}/api/providers/profile/
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
 {
-    "bio": "I am a freelancer for now",
-    "years_of_experience": "2",
-    "business_name": "Jane Doe Freelancing"
+    "phone_number": "09056655000"
 }
 
 
 ###
-# Get Provider Verification Details 
-# The lookup field and kwarg is the provider_id
-GET {{baseUrl}}/api/providers/verification/7872d35a-9935-4d49-95e1-409f33014f9a/
+# Get logged in Provider Verification Details
+GET {{baseUrl}}/api/providers/verification/
 Authorization: Bearer {{accessToken}}
 
 
 ###
-# Update Provider Verification Details
-# The lookup field and kwarg is the provider_id
+# Update logged in Provider Verification Details
 # Can only update: id_document and selfie_image (use postman to upload files)
-PATCH {{baseUrl}}/api/providers/verification/7872d35a-9935-4d49-95e1-409f33014f9a/
+PATCH {{baseUrl}}/api/providers/verification/
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
@@ -66,6 +62,12 @@ Content-Type: application/json
     "selfie_image": "path/to/selfie_image.jpg"
 }
 
+
+###
+# Get Pending Providers Verification Details
+# Admin Only
+GET {{baseUrl}}/api/providers/provider_verifications/
+Authorization: Bearer {{accessToken}}
 
 ###
 # Update Provider Verification Status (Admin Only)
