@@ -44,6 +44,9 @@ class JobRequest(UUIDModel, TimeStampedModel):
     )
     completed_at = models.DateTimeField(blank=True, null=True)
 
+    admin_fee_points = models.PositiveIntegerField(null=True, blank=True)
+    provider_earning_points = models.PositiveIntegerField(null=True, blank=True)
+
     class Meta:
         ordering = ["-created_at"]
 

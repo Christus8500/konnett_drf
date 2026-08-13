@@ -1,11 +1,16 @@
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Prefetch
+from django.shortcuts import get_object_or_404
+
 from django_filters.rest_framework import DjangoFilterBackend
 
 from rest_framework import viewsets, generics, status
+from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAdminUser
 from rest_framework.filters import OrderingFilter, SearchFilter
+
+from drf_spectacular.utils import extend_schema, OpenApiResponse
 
 from apps.core.permissions import IsCustomer, IsCustomerOwner, IsVerifiedProvider
 from apps.core.choices import JobRequestStatus, JobOfferStatus, JobDisputeDecision
@@ -49,22 +54,42 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
     # If the user is a customer, only their own job requests are returned.
     # If the user is a provider, only pending job requests are returned.
     def get_queryset(self):
+        offer_queryset = JobRequestOffer.objects.select_related(
+            "provider",
+            "job__customer",
+        )
+
+        dispute_queryset = JobDispute.objects.select_related(
+            "job",
+            "job__customer",
+        )
+
         queryset = JobRequest.objects.select_related(
             "customer",
             "category",
         ).prefetch_related(
             "job_request_images",
             "job_completion_images",
-            "job_offers__provider",
+            Prefetch(
+                "job_offers",
+                queryset=offer_queryset,
+            ),
+            Prefetch(
+                "dispute",
+                queryset=dispute_queryset,
+            ),
         )
 
         user = self.request.user
         if user.is_staff:
             return queryset
+
         if hasattr(user, "customer_profile"):
             return queryset.filter(customer=user.customer_profile)
+
         if hasattr(user, "provider_profile"):
             return queryset.filter(status=JobRequestStatus.PENDING)
+
         return queryset.none()
 
     def get_serializer_class(self):
@@ -125,17 +150,26 @@ class JobRequestImageCreateView(JobRequestMixin, generics.CreateAPIView):
     serializer_class = JobRequestImageSerializer
     permission_classes = [IsCustomer]
 
+    @transaction.atomic
     def create(self, request, *args, **kwargs):
-        job = self.get_job()
+        job = get_object_or_404(
+            JobRequest.objects.select_for_update(),
+            pk=self.kwargs["pk"],
+        )
 
         self.check_job_owner(job)
         self.ensure_job_is_pending(job)
+
+        if job.job_request_images.count() >= MAX_IMAGES:
+            return Response(
+                {"detail": "Maximum of 5 images allowed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         serializer = self.get_serializer(
             data=request.data,
             context={"job": job},
         )
-
         serializer.is_valid(raise_exception=True)
 
         serializer.save(job=job)
@@ -146,10 +180,18 @@ class JobRequestImageCreateView(JobRequestMixin, generics.CreateAPIView):
         )
 
 
-class JobRequestImageDeleteView(JobRequestMixin, generics.DestroyAPIView):
+class JobRequestImageDeleteView(JobRequestMixin, APIView):
     permission_classes = [IsCustomer]
     queryset = JobRequestImage.objects.all()
 
+    http_method_names = ["delete"]
+
+    @extend_schema(
+        request=None,
+        responses={
+            204: OpenApiResponse(description="Image deleted successfully."),
+        },
+    )
     def destroy(self, request, *args, **kwargs):
         image = self.get_object()
         job = image.job
@@ -180,13 +222,16 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
     # get_queryset returns the appropriate queryset based on the request method and whether a specific job ID is provided in the URL.
     # For GET requests without a job ID, only verified providers can access the endpoint.
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return JobRequestOffer.objects.none()
+
         # Provider endpoint: /provider/offers/
         if "pk" not in self.kwargs:
             return (
                 JobRequestOffer.objects.filter(
                     provider=self.request.user.provider_profile,
                 )
-                .select_related("provider", "job")
+                .select_related("provider", "job__customer")
                 .order_by("status", "-created_at")
             )
 
@@ -196,7 +241,7 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
 
         return (
             JobRequestOffer.objects.filter(job=job)
-            .select_related("provider", "job")
+            .select_related("provider", "job__customer")
             .order_by("-created_at")
         )
 
@@ -237,12 +282,19 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
         )
 
 
-class JobOfferAcceptView(JobRequestMixin, ProviderMixin, generics.UpdateAPIView):
+class JobOfferAcceptView(JobRequestMixin, ProviderMixin, APIView):
     queryset = JobRequestOffer.objects.select_related("job")
     permission_classes = [IsCustomer]
+    http_method_names = ["patch"]
 
     # transaction.atomic ensures that the entire operation is treated as a single transaction.
     # If any part of the operation fails, the entire transaction will be rolled back, ensuring data integrity.
+    @extend_schema(
+        request=None,
+        responses={
+            200: OpenApiResponse(description="Offer accepted."),
+        },
+    )
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
         offer = self.get_object()
@@ -275,10 +327,17 @@ class JobOfferAcceptView(JobRequestMixin, ProviderMixin, generics.UpdateAPIView)
         return Response({"detail": "Offer accepted."}, status=status.HTTP_200_OK)
 
 
-class JobOfferRejectView(JobRequestMixin, ProviderMixin, generics.UpdateAPIView):
+class JobOfferRejectView(JobRequestMixin, ProviderMixin, APIView):
     queryset = JobRequestOffer.objects.select_related("job")
     permission_classes = [IsCustomer]
+    http_method_names = ["patch"]
 
+    @extend_schema(
+        request=None,
+        responses={
+            200: OpenApiResponse(description="Offer rejected."),
+        },
+    )
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
         offer = self.get_object()
@@ -301,13 +360,20 @@ class JobOfferRejectView(JobRequestMixin, ProviderMixin, generics.UpdateAPIView)
         )
 
 
-class JobOfferWithdrawView(ProviderMixin, JobRequestMixin, generics.UpdateAPIView):
+class JobOfferWithdrawView(ProviderMixin, JobRequestMixin, APIView):
     queryset = JobRequestOffer.objects.select_related(
         "job",
         "provider",
     )
     permission_classes = [IsVerifiedProvider]
+    http_method_names = ["patch"]
 
+    @extend_schema(
+        request=None,
+        responses={
+            200: OpenApiResponse(description="Offer withdrawn."),
+        },
+    )
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
         offer = self.get_object()
@@ -357,9 +423,16 @@ class JobCompletionImageCreateView(
         )
 
 
-class JobRequestCompletionView(JobRequestMixin, ProviderMixin, generics.UpdateAPIView):
+class JobRequestCompletionView(JobRequestMixin, ProviderMixin, APIView):
     permission_classes = [IsVerifiedProvider]
+    http_method_names = ["patch"]
 
+    @extend_schema(
+        request=None,
+        responses={
+            200: OpenApiResponse(description="Completion request sent successfully.")
+        },
+    )
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
         job = self.get_job()
@@ -390,9 +463,16 @@ class JobRequestCompletionView(JobRequestMixin, ProviderMixin, generics.UpdateAP
         )
 
 
-class JobConfirmCompletionView(JobRequestMixin, generics.UpdateAPIView):
+class JobConfirmCompletionView(JobRequestMixin, APIView):
     permission_classes = [IsCustomer]
+    http_method_names = ["patch"]
 
+    @extend_schema(
+        request=None,
+        responses={
+            200: OpenApiResponse(description="Job completed successfully."),
+        },
+    )
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
         job = self.get_job()
@@ -424,6 +504,7 @@ class JobConfirmCompletionView(JobRequestMixin, generics.UpdateAPIView):
 class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
     serializer_class = JobDisputeSerializer
     permission_classes = [IsCustomer]
+    http_method_names = ["post"]
 
     # create() handles the creation of a new dispute for a specific job.
     # It ensures that the job is still awaiting confirmation before allowing the creation of a dispute.
@@ -487,6 +568,7 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
         "job",
         "job__customer",
     )
+    http_method_names = ["patch"]
 
     @transaction.atomic
     def patch(self, request, *args, **kwargs):

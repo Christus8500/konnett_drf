@@ -11,5 +11,8 @@ class CustomerProfileView(generics.RetrieveUpdateAPIView):
     permission_classes = [IsCustomer]
     http_method_names = ["get", "patch"]
 
+    def get_queryset(self):
+        return CustomerProfile.objects.select_related("user")
+
     def get_object(self):
-        return self.request.user.customer_profile
+        return self.get_queryset().get(user=self.request.user)

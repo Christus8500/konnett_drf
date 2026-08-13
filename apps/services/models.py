@@ -15,10 +15,17 @@ class Category(UUIDModel):
     # Override the save method to automatically generate a unique slug based on the category name.
     def save(self, *args, **kwargs):
         base_slug = slugify(self.name) or "category"
+
+        existing_slugs = set(
+            Category.objects.filter(slug__startswith=base_slug)
+            .exclude(pk=self.pk)
+            .values_list("slug", flat=True)
+        )
+
         slug = base_slug
         counter = 1
 
-        while Category.objects.filter(slug=slug).exclude(pk=self.pk).exists():
+        while slug in existing_slugs:
             slug = f"{base_slug}-{counter}"
             counter += 1
 

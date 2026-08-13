@@ -22,6 +22,7 @@ from apps.core.permissions import IsProvider, IsProviderOwner, IsVerifiedProvide
 class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
+    http_method_names = ["get", "post", "patch", "delete"]
 
     def get_permissions(self):
         if self.action in ["list", "retrieve"]:
@@ -31,7 +32,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
 
 # View for listing and creating services, allowing any user to list services but restricting creation to verified providers.
 class ListCreateServiceView(generics.ListCreateAPIView):
-    queryset = Service.objects.select_related("provider", "provider__user", "category")
+    queryset = Service.objects.select_related("provider", "category")
     filter_backends = [
         DjangoFilterBackend,
         SearchFilter,
@@ -39,7 +40,7 @@ class ListCreateServiceView(generics.ListCreateAPIView):
     ]
     filterset_class = ServiceFilter
     search_fields = ["title", "description"]
-    ordering_fields = ["minimum_price", "created_at"]
+    ordering_fields = ["minimum_points", "created_at"]
 
     def get_serializer_class(self):
         if self.request.method == "GET":
@@ -59,6 +60,7 @@ class ListCreateServiceView(generics.ListCreateAPIView):
 # View for retrieving, updating, and deleting a specific service, allowing any user to retrieve a service but restricting update and delete actions to the service's provider.
 class RetrieveUpdateDeleteServiceView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Service.objects.select_related("provider", "provider__user", "category")
+    http_method_names = ["get", "patch", "delete"]
 
     def get_serializer_class(self):
         if self.request.method == "GET":
@@ -78,5 +80,5 @@ class MyServiceListView(generics.ListAPIView):
 
     def get_queryset(self):
         return Service.objects.filter(provider__user=self.request.user).select_related(
-            "provider", "provider__user", "category"
+            "provider", "category"
         )

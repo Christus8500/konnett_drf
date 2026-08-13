@@ -5,30 +5,36 @@ from apps.konnett_points.views import (
     UserTransactionView,
     PointPurchaseView,
     PointPurchaseVerificationView,
-    WithdrawalRequestView,
+    WithdrawalRequestListCreateView,
+    WithdrawalRequestRetrieveView,
     WithdrawalApproveView,
     WithdrawalRejectView,
 )
 
 urlpatterns = [
+    # User Wallet
     path("wallet/", UserWalletView.as_view(), name="user-wallet"),
+    # User Transactions
     path(
         "transactions/", UserTransactionView.as_view(), name="user-wallet-transactions"
     ),
+    # Point Purchase
     path("purchase/", PointPurchaseView.as_view(), name="purchase-konnett-points"),
+    # Point Purchase Verification
     path(
         "verify/",
         PointPurchaseVerificationView.as_view(),
         name="verify-purchase-konnett-points",
     ),
+    # Withdrawal Requests
     path(
         "withdrawals/",
-        WithdrawalRequestView.as_view(),
+        WithdrawalRequestListCreateView.as_view(),
         name="withdrawal-list-create",
     ),
     path(
         "withdrawals/<uuid:pk>/",
-        WithdrawalRequestView.as_view(),
+        WithdrawalRequestRetrieveView.as_view(),
         name="withdrawal-retrieve",
     ),
     path(

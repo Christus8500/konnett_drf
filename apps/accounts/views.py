@@ -4,7 +4,10 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 
+from drf_spectacular.utils import extend_schema
+
 from apps.accounts.serializers import (
+    LoginResponseSerializer,
     RegisterSerializer,
     LoginSerializer,
     UserSerializer,
@@ -24,6 +27,7 @@ class UserViewSet(
     queryset = User.objects.all()
     serializer_class = UserSerializer
     permission_classes = [IsAdminUser]
+    http_method_names = ["get", "delete"]
 
 
 # RegisterView: A view for handling user registration requests. Only accessible by any user.
@@ -55,6 +59,10 @@ class LoginView(APIView):
     permission_classes = [AllowAny]
 
     # Overriding post() to handle user login. It validates the incoming data, authenticates the user, generates JWT tokens for the authenticated user, and returns a response with the user's data and tokens.
+    @extend_schema(
+        request=LoginSerializer,
+        responses=LoginResponseSerializer,
+    )
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

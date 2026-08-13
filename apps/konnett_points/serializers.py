@@ -1,4 +1,5 @@
 from decimal import Decimal
+from uuid import UUID
 
 from rest_framework import serializers
 
@@ -12,6 +13,8 @@ from apps.konnett_points.models import (
 from apps.providers.models import ProviderProfile
 
 
+# UserPointWalletSerializer serializes the PointWallet model, 
+# including the user's email and available/locked points.
 class UserPointWalletSerializer(serializers.ModelSerializer):
     user = serializers.CharField(source="user.email", read_only=True)
 
@@ -21,6 +24,8 @@ class UserPointWalletSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+# PointPurchaseSerializer serializes the PointPurchase model, 
+# including customer details and purchase information.
 class PointPurchaseSerializer(serializers.ModelSerializer):
     customer_fullname = serializers.CharField(
         source="customer.fullname", read_only=True
@@ -60,6 +65,7 @@ class PointPurchaseSerializer(serializers.ModelSerializer):
             "created_at",
         ]
 
+    # validate_money_amount ensures that the money amount is a whole number and meets the minimum requirement.
     def validate_money_amount(self, value):
         if value % 1 != 0:
             raise serializers.ValidationError("Only whole naira amounts are allowed.")
@@ -68,6 +74,8 @@ class PointPurchaseSerializer(serializers.ModelSerializer):
         return value
 
 
+# PointTransactionSerializer serializes the PointTransaction model,
+# including wallet email, purchase ID, job ID, and withdrawal request ID.
 class PointTransactionSerializer(serializers.ModelSerializer):
     wallet_email = serializers.EmailField(
         source="wallet.user.email",
@@ -92,16 +100,18 @@ class PointTransactionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
-    def get_purchase_id(self, obj):
+    def get_purchase_id(self, obj) -> UUID | None:
         return obj.purchase_id
 
-    def get_job_id(self, obj):
+    def get_job_id(self, obj) -> UUID | None:
         return obj.job_id
 
-    def get_withdrawal_request_id(self, obj):
+    def get_withdrawal_request_id(self, obj) -> UUID | None:
         return obj.withdrawal_request_id
 
 
+# WithdrawalRequestSerializer serializes the WithdrawalRequest model,
+# including provider details and processed information.
 class WithdrawalRequestSerializer(serializers.ModelSerializer):
     class ProviderInfoSerializer(serializers.ModelSerializer):
         provider_email = serializers.CharField(source="user.email", read_only=True)

@@ -46,6 +46,10 @@ class PointPurchase(UUIDModel, TimeStampedModel):
         max_digits=20, decimal_places=2, validators=[MinValueValidator(Decimal("0.00"))]
     )
     points = models.PositiveIntegerField()
+    # 10% of the purchased points
+    admin_fee_points = models.PositiveIntegerField(default=0)
+    # Actual points credited to the customer's wallet
+    credited_points = models.PositiveIntegerField(default=0)
     payment_reference = models.CharField(max_length=100, unique=True)
     status = models.CharField(
         max_length=30,
@@ -115,7 +119,7 @@ class PointTransaction(UUIDModel, TimeStampedModel):
         null=True,
         blank=True,
         on_delete=models.CASCADE,
-        related_name="point_transactions"
+        related_name="point_transactions",
     )
     points = models.IntegerField()
     transaction_type = models.CharField(
@@ -123,9 +127,11 @@ class PointTransaction(UUIDModel, TimeStampedModel):
     )
     transaction_reference = models.CharField(max_length=100, unique=True)
 
-
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["wallet", "-created_at"]),
+        ]
 
     def __str__(self):
         return f"{self.wallet.user.first_name} {self.wallet.user.last_name}'s Wallet > {self.transaction_type.upper()} > {self.points} points"

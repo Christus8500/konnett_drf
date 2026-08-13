@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db import transaction
 from django.utils import timezone
 
@@ -8,6 +10,7 @@ from apps.core.utils import generate_reference
 from apps.core.constants import (
     TRANSACTION_REFERENCE_PREFIX,
     PURCHASE_REFERENCE_PREFIX,
+    ADMIN_FEE_RATE,
 )
 
 from apps.konnett_points.models import PointTransaction, PointPurchase
@@ -95,11 +98,15 @@ def create_point_purchase_record(
     status=PaymentStatus.PENDING,
 ):
     points = int(money_amount)
+    admin_fee_points = int(points * ADMIN_FEE_RATE)
+    credited_points = points - admin_fee_points
 
     return PointPurchase.objects.create(
         customer=customer,
         money_amount=money_amount,
         points=points,
+        admin_fee_points=admin_fee_points,
+        credited_points=credited_points,
         payment_reference=generate_reference(PURCHASE_REFERENCE_PREFIX),
         status=status,
     )
@@ -255,24 +262,41 @@ def pay_provider(job, accepted_offer):
     if customer_wallet.locked_points < points_to_transfer:
         raise ValidationError({"locked_points": "Insufficient locked points."})
 
+    admin_fee_points = int(points_to_transfer * ADMIN_FEE_RATE)
+    provider_points = points_to_transfer - admin_fee_points
+
+    # Remove the full amount from customer's locked balance
     customer_wallet.locked_points -= points_to_transfer
-    provider_wallet.available_points += points_to_transfer
+    # Give 90% to provider
+    provider_wallet.available_points += provider_points
 
     customer_wallet.save(update_fields=["locked_points"])
-
     provider_wallet.save(update_fields=["available_points"])
 
+    # Record the actual amount the provider earned
+    provider_transaction = create_point_transaction(
+        wallet=provider_wallet,
+        points=provider_points,
+        transaction_type=TransactionType.EARNED,
+        job=job,
+    )
+
+    # Store the fee and provider earning on the job
+    job.admin_fee_points = admin_fee_points
+    job.provider_earning_points = provider_points
+
+    job.save(
+        update_fields=[
+            "admin_fee_points",
+            "provider_earning_points",
+        ]
+    )
+
+    # Record customer's payment
     customer_transaction = create_point_transaction(
         wallet=customer_wallet,
         points=points_to_transfer,
         transaction_type=TransactionType.PROVIDER_PAY,
-        job=job,
-    )
-
-    provider_transaction = create_point_transaction(
-        wallet=provider_wallet,
-        points=points_to_transfer,
-        transaction_type=TransactionType.EARNED,
         job=job,
     )
 

@@ -57,6 +57,7 @@ class TransactionType(models.TextChoices):
     WITHDRAWAL = "withdrawal", "Withdrawal"
     REFUND = "refund", "Refund"
     ADJUSTMENT = "adjustment", "Adjustment"
+    ADMIN_FEE = "admin_fee", "Admin Fee"
 
 
 #  Choices for withdrawal status

@@ -15,4 +15,4 @@ class PointTransactionAdmin(admin.ModelAdmin):
 class PointPurchaseAdmin(admin.ModelAdmin):
     list_filter = ("status",)
     search_fields = ("payment_reference",)
-    readonly_fields = ("payment_reference", )
+    readonly_fields = ("payment_reference",)

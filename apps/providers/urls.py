@@ -3,7 +3,7 @@ from django.urls import path
 from apps.providers.views import (
     ProviderProfileView,
     ProviderVerificationView,
-    AdminProviderVerificationsView,
+    AdminPendingProviderVerificationsListView,
     update_provider_verification_status,
 )
 
@@ -16,7 +16,7 @@ urlpatterns = [
     ),
     path(
         "provider_verifications/",
-        AdminProviderVerificationsView.as_view(),
+        AdminPendingProviderVerificationsListView.as_view(),
         name="provider_verifications_list",
     ),
     path(

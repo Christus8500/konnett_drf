@@ -14,21 +14,12 @@ from apps.jobs.models import (
     JobDispute,
 )
 
-MAX_IMAGES = 5
-
 
 class JobRequestImageSerializer(serializers.ModelSerializer):
     class Meta:
         model = JobRequestImage
         fields = ["id", "image"]
         read_only_fields = ["id"]
-
-    def validate(self, attrs):
-        job = self.context["job"]
-
-        if job.job_request_images.count() >= MAX_IMAGES:
-            raise serializers.ValidationError("Maximum of 5 images allowed.")
-        return attrs
 
 
 class JobCompletionImageSerializer(serializers.ModelSerializer):

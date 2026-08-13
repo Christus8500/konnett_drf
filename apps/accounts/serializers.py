@@ -101,3 +101,4 @@ class UserSerializer(serializers.ModelSerializer):
             "is_active",
         )
         read_only_fields = fields
+
