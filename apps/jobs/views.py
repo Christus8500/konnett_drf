@@ -56,16 +56,20 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
     def get_queryset(self):
         offer_queryset = JobRequestOffer.objects.select_related(
             "provider",
+            "provider__user",
             "job__customer",
+            "job__customer__user",
         )
 
         dispute_queryset = JobDispute.objects.select_related(
             "job",
             "job__customer",
+            "job__customer__user",
         )
 
         queryset = JobRequest.objects.select_related(
             "customer",
+            "customer__user",
             "category",
         ).prefetch_related(
             "job_request_images",
@@ -156,6 +160,7 @@ class JobRequestImageCreateView(JobRequestMixin, generics.CreateAPIView):
             JobRequest.objects.select_for_update(),
             pk=self.kwargs["pk"],
         )
+        MAX_IMAGES = 5
 
         self.check_job_owner(job)
         self.ensure_job_is_pending(job)
