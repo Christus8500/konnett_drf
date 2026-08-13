@@ -20,7 +20,6 @@ from apps.accounts.models import User
 class UserViewSet(
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
-    mixins.UpdateModelMixin,
     mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
