@@ -1,13 +1,17 @@
+from django.db import transaction
+
 from rest_framework import serializers
 
 from apps.providers.models import ProviderProfile, ProviderVerification
 
 from apps.core.validators import validate_image
+from apps.core.models import Address
+from apps.core.serializers import AddressSerializer
 from apps.core.choices import ProviderVerificationStatus
 
+
+
 # Serializer for the ProviderProfile model, handling serialization and deserialization of provider profile data.
-
-
 class ProviderProfileSerializer(serializers.ModelSerializer):
     user_id = serializers.UUIDField(source="user.id", required=False, read_only=True)
     phone_number = serializers.CharField(source="user.phone_number", required=False)
@@ -17,6 +21,33 @@ class ProviderProfileSerializer(serializers.ModelSerializer):
 
     profile_image = serializers.ImageField(
         validators=[validate_image],
+        required=False,
+    )
+
+    address = serializers.CharField(
+        source="address.address",
+        required=False,
+    )
+
+    city = serializers.CharField(
+        source="address.city",
+        required=False,
+    )
+
+    state = serializers.CharField(
+        source="address.state",
+        required=False,
+    )
+    latitude = serializers.DecimalField(
+        source="address.latitude",
+        max_digits=9,
+        decimal_places=6,
+        required=False,
+    )
+    longitude = serializers.DecimalField(
+        source="address.longitude",
+        max_digits=9,
+        decimal_places=6,
         required=False,
     )
 
@@ -30,13 +61,21 @@ class ProviderProfileSerializer(serializers.ModelSerializer):
             "first_name",
             "last_name",
             "business_name",
-            "is_verified",
-            "bio",
-            "years_of_experience",
             "is_available",
+            "bio",
+            "profile_image",
+            "is_verified",
+            "years_of_experience",
             "average_rating",
             "completed_jobs",
-            "profile_image",
+            "address",
+            "city",
+            "state",
+            "latitude",
+            "longitude",
+            "account_number",
+            "account_name",
+            "bank_name",
             "created_at",
             "updated_at",
         ]
@@ -67,17 +106,39 @@ class ProviderProfileSerializer(serializers.ModelSerializer):
         return value
 
     # Overriding the serializer update method
-    # So the serializer will know how to update the values on the "User" table
+    # So the serializer will know how to update the values on the "User" and "Address" table
+    @transaction.atomic
     def update(self, instance, validated_data):
         user_data = validated_data.pop("user", {})
+        address_data = validated_data.pop("address", {})
 
+        # Update user fields
         user = instance.user
+
         for attr, value in user_data.items():
             setattr(user, attr, value)
-        user.save()
 
+        if user_data:
+            user.save()
+
+        # Create or update provider address
+        if address_data:
+            if instance.address:
+                address = instance.address
+
+                for attr, value in address_data.items():
+                    setattr(address, attr, value)
+
+                address.save()
+            else:
+                address = Address.objects.create(**address_data)
+
+                instance.address = address
+
+        # Update provider profile fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
+
         instance.save()
 
         return instance

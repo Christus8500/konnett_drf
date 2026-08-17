@@ -11,8 +11,14 @@ class JobFilter(django_filters.FilterSet):
         model = JobRequest
         fields = {
             "category__name": ["iexact", "icontains"],
-            "city": ["iexact"],
-            "state": ["iexact"],
+            "primary_location__city": ["iexact"],
+            "primary_location__state": ["iexact"],
+            "primary_location__latitude": ["exact"],
+            "primary_location__longitude": ["exact"],
+            "secondary_location__city": ["iexact"],
+            "secondary_location__state": ["iexact"],
+            "secondary_location__latitude": ["exact"],
+            "secondary_location__longitude": ["exact"],
             "status": ["iexact"],
             "points_amount": ["exact", "lt", "gt", "range"],
         }

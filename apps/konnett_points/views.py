@@ -2,6 +2,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
 from django.utils import timezone
+from django.shortcuts import get_object_or_404
 
 from rest_framework import generics, mixins, status
 from rest_framework.views import APIView
@@ -48,11 +49,7 @@ class UserWalletView(generics.RetrieveAPIView):
     serializer_class = UserPointWalletSerializer
 
     def get_object(self):
-        return (
-            PointWallet.objects
-            .select_related("user")
-            .get(user=self.request.user)
-        )
+        return PointWallet.objects.select_related("user").get(user=self.request.user)
 
 
 # UserTransactionView retrieves the authenticated user's PointTransaction history.
@@ -307,9 +304,7 @@ class WithdrawalRequestListCreateView(
         )
 
         if self.request.user.is_staff:
-            return queryset.filter(
-                status=WithdrawalStatus.PENDING
-            )
+            return queryset.filter(status=WithdrawalStatus.PENDING)
 
         if self.request.user.role == UserRole.PROVIDER:
             return queryset.filter(
@@ -344,9 +339,7 @@ class WithdrawalRequestRetrieveView(
             return queryset
 
         if self.request.user.role == UserRole.PROVIDER:
-            return queryset.filter(
-                provider=self.request.user.provider_profile
-            )
+            return queryset.filter(provider=self.request.user.provider_profile)
 
         return queryset.none()
 
@@ -361,10 +354,11 @@ class WithdrawalApproveView(generics.UpdateAPIView):
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
         # Lock the withdrawal request for update to prevent race conditions during approval.
-        withdrawal = (
-            WithdrawalRequest.objects.select_for_update()
-            .select_related("provider__user")
-            .get(pk=kwargs["pk"])
+        withdrawal = get_object_or_404(
+            WithdrawalRequest.objects.select_for_update().select_related(
+                "provider__user"
+            ),
+            pk=kwargs["pk"],
         )
 
         # If the withdrawal request is not in a pending state,
@@ -436,10 +430,11 @@ class WithdrawalRejectView(generics.UpdateAPIView):
 
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
-        withdrawal = (
-            WithdrawalRequest.objects.select_for_update()
-            .select_related("provider__user")
-            .get(pk=kwargs["pk"])
+        withdrawal = get_object_or_404(
+            WithdrawalRequest.objects.select_for_update().select_related(
+                "provider__user"
+            ),
+            pk=kwargs["pk"],
         )
 
         if withdrawal.status != WithdrawalStatus.PENDING:

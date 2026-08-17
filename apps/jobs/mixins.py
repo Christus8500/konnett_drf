@@ -14,7 +14,13 @@ class JobRequestMixin:
 
     # This method retrieves a JobRequest instance based on the primary key provided in the URL parameters.
     def get_job(self):
-        return get_object_or_404(JobRequest, pk=self.kwargs["pk"])
+        return get_object_or_404(
+            JobRequest.objects.select_related(
+                "customer",
+                "customer__user",
+            ),
+            pk=self.kwargs["pk"],
+        )
 
     def check_job_owner(self, job):
         """

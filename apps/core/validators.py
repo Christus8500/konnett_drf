@@ -5,7 +5,6 @@ MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5MB
 
 # Validator function to check if the uploaded image is of allowed type and within the size limit.
 def validate_image(image):
-    print("Validator called:", image)
     allowed = ["image/jpeg", "image/png"]
 
     if image.content_type not in allowed:

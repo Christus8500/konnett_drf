@@ -7,7 +7,7 @@ from apps.services.models import Category, Service
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
-        fields = ["id", "name", "slug"]
+        fields = ["id", "name", "slug", "requires_secondary_location"]
         read_only_fields = ["id", "slug"]
 
 

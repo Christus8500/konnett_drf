@@ -6,3 +6,4 @@ from apps.customers.models import *
 class CustomerProfileAdmin(admin.ModelAdmin):
     list_display = ("id", "fullname")
     search_fields = ("user__email", "fullname")
+    readonly_fields = ("user", "address", "city", "state", "profile_image")

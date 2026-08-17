@@ -11,6 +11,7 @@ from apps.core.models import UUIDModel
 class Category(UUIDModel):
     name = models.CharField(max_length=100, unique=True)
     slug = models.SlugField(max_length=255, unique=True, blank=True)
+    requires_secondary_location = models.BooleanField(default=False)
 
     # Override the save method to automatically generate a unique slug based on the category name.
     def save(self, *args, **kwargs):

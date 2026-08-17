@@ -27,15 +27,26 @@ class ProviderProfile(UUIDModel, TimeStampedModel):
     )
 
     business_name = models.CharField(max_length=255, blank=True, null=True)
-    bio = models.TextField(blank=True)
-    years_of_experience = models.PositiveIntegerField(default=0)
     is_available = models.BooleanField(default=True)
-    average_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
-    completed_jobs = models.PositiveIntegerField(default=0)
+
+    bio = models.TextField(blank=True)
     profile_image = models.ImageField(
         upload_to=profile_image_upload, blank=True, null=True
     )
     is_verified = models.BooleanField(default=False)
+
+    years_of_experience = models.PositiveIntegerField(default=0)
+    average_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
+    completed_jobs = models.PositiveIntegerField(default=0)
+
+    address = models.ForeignKey(
+        "core.Address",
+        on_delete=models.PROTECT,
+        related_name="provider_profile",
+        null=True,
+        blank=True,
+    )
+
     account_number = models.CharField(
         max_length=10, blank=True, null=True, default="0000000000"
     )

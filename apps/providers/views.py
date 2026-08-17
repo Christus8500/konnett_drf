@@ -27,7 +27,7 @@ class ProviderProfileView(generics.RetrieveUpdateAPIView):
     http_method_names = ["get", "patch"]
 
     def get_queryset(self):
-        return ProviderProfile.objects.select_related("user")
+        return ProviderProfile.objects.select_related("user", "address")
 
     def get_object(self):
         return self.get_queryset().get(user=self.request.user)

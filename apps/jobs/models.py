@@ -28,13 +28,23 @@ class JobRequest(UUIDModel, TimeStampedModel):
     )
     title = models.CharField(max_length=255)
     description = models.TextField()
+
     points_amount = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+
     deadline = models.DateTimeField(blank=True, null=True)
 
-    job_address = models.TextField()
-    job_address_2 = models.TextField(blank=True, null=True)
-    city = models.CharField(max_length=255)
-    state = models.CharField(max_length=255)
+    primary_location = models.ForeignKey(
+        "core.Address",
+        on_delete=models.PROTECT,
+        related_name="primary_jobs",
+    )
+    secondary_location = models.ForeignKey(
+        "core.Address",
+        on_delete=models.PROTECT,
+        related_name="secondary_jobs",
+        null=True,
+        blank=True,
+    )
 
     status = models.CharField(
         max_length=30,

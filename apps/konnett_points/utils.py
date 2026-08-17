@@ -13,7 +13,7 @@ from apps.core.constants import (
     ADMIN_FEE_RATE,
 )
 
-from apps.konnett_points.models import PointTransaction, PointPurchase
+from apps.konnett_points.models import PointWallet, PointTransaction, PointPurchase
 
 # ^ ################### WALLET HELPER FUNCTIONS ####################
 
@@ -175,7 +175,9 @@ def reserve_job_points(job):
 
     available_points -> locked_points
     """
-    wallet = job.customer.user.point_wallet
+    wallet = PointWallet.objects.select_for_update().get(
+        user=job.customer.user
+    )
     points_to_lock = job.points_amount
 
     lock_points(wallet, points_to_lock)
@@ -199,7 +201,9 @@ def adjust_reserved_points(job, old_points_amount):
     If the new amount is lower:
         locked_points -> available_points
     """
-    wallet = job.customer.user.point_wallet
+    wallet = PointWallet.objects.select_for_update().get(
+        user=job.customer.user
+    )
 
     difference = job.points_amount - old_points_amount
 
@@ -229,7 +233,8 @@ def release_reserved_points(
 
     locked_points -> available_points
     """
-    wallet = job.customer.user.point_wallet
+    wallet = PointWallet.objects.select_for_update().get(user=job.customer.user)
+
     points_to_unlock = job.points_amount
 
     unlock_points(wallet, points_to_unlock)
@@ -254,19 +259,24 @@ def pay_provider(job, accepted_offer):
     Provider:
         available_points -> increased
     """
-    customer_wallet = job.customer.user.point_wallet
-    provider_wallet = accepted_offer.provider.user.point_wallet
+    customer_wallet = PointWallet.objects.select_for_update().get(
+        user=job.customer.user
+    )
 
-    points_to_transfer = job.points_amount
+    provider_wallet = PointWallet.objects.select_for_update().get(
+        user=accepted_offer.provider.user
+    )
 
-    if customer_wallet.locked_points < points_to_transfer:
+    job_points = job.points_amount
+
+    if customer_wallet.locked_points < job_points:
         raise ValidationError({"locked_points": "Insufficient locked points."})
 
-    admin_fee_points = int(points_to_transfer * ADMIN_FEE_RATE)
-    provider_points = points_to_transfer - admin_fee_points
+    admin_fee_points = int(job_points * ADMIN_FEE_RATE)
+    provider_points = job_points - admin_fee_points
 
     # Remove the full amount from customer's locked balance
-    customer_wallet.locked_points -= points_to_transfer
+    customer_wallet.locked_points -= job_points
     # Give 90% to provider
     provider_wallet.available_points += provider_points
 
@@ -295,7 +305,7 @@ def pay_provider(job, accepted_offer):
     # Record customer's payment
     customer_transaction = create_point_transaction(
         wallet=customer_wallet,
-        points=points_to_transfer,
+        points=job_points,
         transaction_type=TransactionType.PROVIDER_PAY,
         job=job,
     )
