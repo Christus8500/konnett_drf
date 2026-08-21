@@ -1,5 +1,7 @@
 from django.contrib.auth.base_user import BaseUserManager
 
+from apps.core.choices import UserRole
+
 
 # Custom user manager for handling user creation and superuser creation
 class UserManager(BaseUserManager):
@@ -19,5 +21,6 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
         extra_fields.setdefault("is_active", True)
+        extra_fields.setdefault("role", UserRole.ADMIN)
 
         return self.create_user(email, password, **extra_fields)

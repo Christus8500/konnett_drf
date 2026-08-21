@@ -8,4 +8,4 @@ class UserAdmin(admin.ModelAdmin):
     list_display = ("email", "role", "is_active")
     list_filter = ("role", "is_active")
     search_fields = ("email", "phone_number")
-    readonly_fields = ("email", "phone_number", "first_name", "last_name", "role")
+    readonly_fields = ("email", "phone_number", "first_name", "last_name")

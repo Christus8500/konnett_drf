@@ -3,7 +3,7 @@ from django.db import models
 
 # Choices for various fields in the application
 class UserRole(models.TextChoices):
-    ADMIN = "admin", "Admin"
+    ADMIN = "konnett001", "Administrator"
     CUSTOMER = "customer", "Customer"
     PROVIDER = "provider", "Provider"
 

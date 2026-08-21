@@ -4,6 +4,8 @@ from rest_framework.filters import OrderingFilter, SearchFilter
 
 from django_filters.rest_framework import DjangoFilterBackend
 
+from drf_spectacular.utils import extend_schema, OpenApiResponse
+
 from apps.services.serializers import (
     CategorySerializer,
     ServiceReadSerializer,
@@ -74,11 +76,21 @@ class RetrieveUpdateDeleteServiceView(generics.RetrieveUpdateDestroyAPIView):
 
 
 # Get all services for the logged-in provider, only accessible to providers
+@extend_schema(
+    responses={
+        200: ServiceReadSerializer(many=True),
+    },
+)
 class MyServiceListView(generics.ListAPIView):
     serializer_class = ServiceReadSerializer
     permission_classes = [IsProvider]
 
     def get_queryset(self):
-        return Service.objects.filter(provider__user=self.request.user).select_related(
+        if getattr(self, "swagger_fake_view", False):
+            return Service.objects.none()
+
+        return Service.objects.filter(
+            provider__user=self.request.user
+        ).select_related(
             "provider", "category"
         )

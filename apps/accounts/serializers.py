@@ -1,6 +1,8 @@
 from django.contrib.auth import authenticate
 from rest_framework import serializers
 
+from apps.core.choices import UserRole
+
 from apps.accounts.models import User
 from apps.accounts.validators import validate_password
 
@@ -40,6 +42,16 @@ class RegisterSerializer(serializers.ModelSerializer):
     def validate_phone_number(self, value):
         if User.objects.filter(phone_number=value).exists():
             raise serializers.ValidationError("Phone number already exists.")
+        return value
+
+    def validate_role(self, value):
+        if value not in [
+            UserRole.PROVIDER,
+            UserRole.CUSTOMER,
+        ]:
+            raise serializers.ValidationError(
+                "You can only register as a provider or customer."
+            )
         return value
 
     def validate(self, attrs):
