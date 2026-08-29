@@ -11,6 +11,11 @@ from rest_framework.permissions import IsAdminUser
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.exceptions import ValidationError
+from rest_framework.throttling import (
+    ScopedRateThrottle,
+    UserRateThrottle,
+    AnonRateThrottle,
+)
 
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 
@@ -124,6 +129,18 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
 
         return [IsCustomer()]
 
+    def get_throttles(self):
+        if self.action in ["list", "retrieve"]:
+            if self.request.user.is_authenticated:
+                return [UserRateThrottle()]
+            else:
+                return [AnonRateThrottle()]
+
+        if self.action in ["create", "partial_update", "destroy"]:
+            return [ScopedRateThrottle(scope="job_mutations")]
+
+        return super().get_throttles()
+
     @transaction.atomic
     def perform_create(self, serializer):
         images = serializer.validated_data.pop("images")
@@ -180,6 +197,8 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
 class JobRequestImageCreateView(JobRequestMixin, generics.CreateAPIView):
     serializer_class = JobRequestImageSerializer
     permission_classes = [IsCustomer]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "job_images"
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
@@ -223,6 +242,8 @@ class JobRequestImageCreateView(JobRequestMixin, generics.CreateAPIView):
 
 class JobRequestImageDeleteView(JobRequestMixin, APIView):
     permission_classes = [IsCustomer]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "job_images"
 
     http_method_names = ["delete"]
 
@@ -293,6 +314,11 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
             .order_by("-created_at")
         )
 
+    def get_throttles(self):
+        if self.request.method == "GET":
+            return [UserRateThrottle()]
+        return [ScopedRateThrottle(scope="job_offers")]
+
     def create(self, request, *args, **kwargs):
         # Provider's get request doesn't have ajob_id
         # This disables the provider from sending a post request w/o including a job_id
@@ -333,6 +359,8 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
 class JobOfferAcceptView(JobRequestMixin, ProviderMixin, APIView):
     permission_classes = [IsCustomer]
     http_method_names = ["patch"]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "job_offer_actions"
 
     # transaction.atomic ensures that the entire operation is treated as a single transaction.
     # If any part of the operation fails, the entire transaction will be rolled back, ensuring data integrity.
@@ -384,6 +412,8 @@ class JobOfferAcceptView(JobRequestMixin, ProviderMixin, APIView):
 class JobOfferRejectView(JobRequestMixin, ProviderMixin, APIView):
     permission_classes = [IsCustomer]
     http_method_names = ["patch"]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "job_offer_actions"
 
     @extend_schema(
         request=None,
@@ -423,6 +453,8 @@ class JobOfferRejectView(JobRequestMixin, ProviderMixin, APIView):
 class JobOfferWithdrawView(ProviderMixin, JobRequestMixin, APIView):
     permission_classes = [IsVerifiedProvider]
     http_method_names = ["patch"]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "job_offer_actions"
 
     @extend_schema(
         request=None,
@@ -462,6 +494,8 @@ class JobCompletionImageCreateView(
 ):
     serializer_class = JobCompletionImageSerializer
     permission_classes = [IsVerifiedProvider]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "job_images"
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
@@ -521,6 +555,8 @@ class JobCompletionImageCreateView(
 class JobRequestCompletionView(JobRequestMixin, ProviderMixin, APIView):
     permission_classes = [IsVerifiedProvider]
     http_method_names = ["patch"]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "job_completion"
 
     @extend_schema(
         request=None,
@@ -561,6 +597,8 @@ class JobRequestCompletionView(JobRequestMixin, ProviderMixin, APIView):
 class JobConfirmCompletionView(JobRequestMixin, APIView):
     permission_classes = [IsCustomer]
     http_method_names = ["patch"]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "job_completion"
 
     @extend_schema(
         request=None,
@@ -610,6 +648,8 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
     serializer_class = JobDisputeSerializer
     permission_classes = [IsCustomer]
     http_method_names = ["post"]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "disputes"
 
     # create() handles the creation of a new dispute for a specific job.
     # It ensures that the job is still awaiting confirmation before allowing the creation of a dispute.
@@ -656,6 +696,7 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
 class JobDisputeDetailView(JobRequestMixin, generics.RetrieveAPIView):
     serializer_class = JobDisputeSerializer
     permission_classes = [IsCustomer | IsAdminUser]
+    throttle_classes = [UserRateThrottle]
     queryset = JobDispute.objects.select_related(
         "job",
         "job__customer",
@@ -676,6 +717,8 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
     serializer_class = AdminJobDisputeSerializer
     permission_classes = [IsAdminUser]
     http_method_names = ["patch"]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "disputes"
 
     def get_queryset(self):
         return JobDispute.objects.select_for_update().select_related(

@@ -1,5 +1,5 @@
 @baseUrl = http://localhost:8000
-@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg2NTc4ODYzLCJpYXQiOjE3ODY1NzcwNjMsImp0aSI6IjhiZDdkZGM0OGI1MzQ4NTZiMTc3YmQ5Y2E5NWY2NmQzIiwidXNlcl9pZCI6IjcxZGQ4OGViLWJiNDEtNGQ1Yy1hODA2LTI4OGQ1YjUwYmQ4ZSJ9.2FLuoLqXwTEaCs-VkF3phj8uIYSyYjP4VvCtbCII-Tg
+@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg3ODcyNjMxLCJpYXQiOjE3ODc4NzA4MzEsImp0aSI6ImU2YzhmMGIzYjI3MDQ2ZmM5MmQzYzk0YjM5MzdkZDU5IiwidXNlcl9pZCI6ImNiNTQyZDBmLWRjZjQtNDEzYy1iNDZlLWQxMzk3MzU5YmZmOSJ9.j3kr1Un0JhrH6z9apRHZxGQn5Fm162LlW06V7P797zI
 
 ###
 # Create categories.
@@ -9,7 +9,7 @@ Content-Type: application/json
 Authorization: Bearer {{accessToken}}
 
 {
-    "name": "Logistics"
+    "name": "Barbing"
 }
 
 

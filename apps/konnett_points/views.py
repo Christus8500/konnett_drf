@@ -1,19 +1,24 @@
 from decimal import Decimal, InvalidOperation
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
+
+from django_filters.rest_framework import DjangoFilterBackend
 
 from rest_framework import generics, mixins, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAdminUser, IsAuthenticated, AllowAny
 from rest_framework.exceptions import ValidationError
+from rest_framework.filters import OrderingFilter
+from rest_framework.throttling import UserRateThrottle, ScopedRateThrottle
 
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 
-from apps.core.utils import generate_reference
+from apps.core.utils import generate_reference, get_cache, set_cache
 from apps.core.constants import WITHDRAWAL_REFERENCE_PREFIX, MINIMUM_WITHDRAW_POINTS
 from apps.core.choices import UserRole, PaymentStatus, TransactionType, WithdrawalStatus
 from apps.core.permissions import IsCustomer, IsVerifiedProvider
@@ -39,6 +44,7 @@ from apps.konnett_points.utils import (
     unlock_points,
     deduct_locked_points,
 )
+from apps.konnett_points.filters import PointTransactionFilter, WithdrawalRequestFilter
 
 # Create your views here.
 
@@ -56,6 +62,10 @@ class UserWalletView(generics.RetrieveAPIView):
 class UserTransactionView(generics.ListAPIView):
     serializer_class = PointTransactionSerializer
     permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    filterset_class = PointTransactionFilter
+    ordering_fields = ["processed_at"]
+    throttle_classes = [UserRateThrottle]
 
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
@@ -67,11 +77,28 @@ class UserTransactionView(generics.ListAPIView):
             .order_by("-created_at")
         )
 
+    def list(self, request, *args, **kwargs):
+        wallet_id = request.user.point_wallet.id
+
+        cache_key = f"wallet:{wallet_id}:transactions:{request.GET.urlencode()}"
+        cached_data = get_cache(cache_key)
+        if cached_data is not None:
+            return Response(cached_data)
+
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+
+        set_cache(cache_key, serializer.data, timeout=3600)
+
+        return Response(serializer.data)
+
 
 # PointPurchaseView allows customers to create a new PointPurchase record.
 class PointPurchaseView(generics.CreateAPIView):
     serializer_class = PointPurchaseSerializer
     permission_classes = [IsCustomer]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "point_purchase"
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -234,7 +261,9 @@ class WithdrawalRequestListCreateView(
     generics.GenericAPIView,
 ):
     queryset = WithdrawalRequest.objects.all()
-    serializer_class = WithdrawalRequestSerializer
+    serializer_class = WithdrawalRequestSerializer    
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    filterset_class = WithdrawalRequestFilter
 
     def get_permissions(self):
         if self.request.method == "POST":
@@ -294,6 +323,24 @@ class WithdrawalRequestListCreateView(
             status=status.HTTP_201_CREATED,
         )
 
+    def list(self, request, *args, **kwargs):
+        if request.user.is_staff:
+            cache_key = "withdrawal_requests:admin:pending"
+        else:
+            provider_id = request.user.provider_profile.id
+            cache_key = f"withdrawal_requests:provider:{provider_id}:{request.GET.urlencode()}"
+
+        cached_data = get_cache(cache_key)
+        if cached_data is not None:
+            return Response(cached_data)
+
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+
+        set_cache(cache_key, serializer.data, timeout=settings.CACHE_TIMEOUT)
+
+        return Response(serializer.data)
+
     # get_queryset method filters the withdrawal requests based on the user's role and returns the appropriate queryset.
     # If the user is an admin, it returns all pending withdrawal requests.
     # If the user is a provider, it returns only their own withdrawal requests.
@@ -312,6 +359,11 @@ class WithdrawalRequestListCreateView(
             ).order_by("-created_at")
 
         return queryset.none()
+
+    def get_throttles(self):
+        if self.request.method == "GET":
+            return [UserRateThrottle()]
+        return [ScopedRateThrottle(scope="withdrawals")]
 
 
 # WithdrawalRequestRetrieveView retrieves a specific withdrawal request based on the provided ID.

@@ -3,7 +3,7 @@ import secrets
 import string
 
 from django.utils import timezone
-
+from django.core.cache import cache
 from django.db.models import Avg
 
 
@@ -44,3 +44,16 @@ def calculate_average_rating(queryset):
         float: The average value of the specified field, or None if the queryset is empty.
     """
     return queryset.aggregate(average=Avg("rating"))["average"] or 0
+
+
+# Caching
+def get_cache(key):
+    return cache.get(key)
+
+
+def set_cache(key, value, timeout=300):
+    cache.set(key, value, timeout)
+
+
+def delete_cache(key):
+    cache.delete(key)

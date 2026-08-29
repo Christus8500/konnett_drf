@@ -105,6 +105,20 @@ DATABASES = {
 }
 
 
+# Caching
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://127.0.0.1:6380/1",
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        },
+    }
+}
+
+CACHE_TIMEOUT = 60 * 15
+
+
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 
@@ -155,6 +169,18 @@ REST_FRAMEWORK = {
         "rest_framework_simplejwt.authentication.JWTAuthentication",
         "rest_framework.authentication.SessionAuthentication",
     ),
+    "DEFAULT_THROTTLE_RATES": {
+        "user": "100/hour",
+        "anon": "20/hour",
+        "job_mutations": "50/hour",
+        "job_offers": "10/min",
+        "job_offer_actions": "20/min",
+        "job_images": "10/min",
+        "job_completion": "10/min",
+        "disputes": "10/min",
+        "withdrawals_create": "2/hour",
+        "point_purchase": "5/min",
+    },
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_FILTER_BACKENDS": [
         "django_filters.rest_framework.DjangoFilterBackend",
@@ -175,9 +201,9 @@ SIMPLE_JWT = {
 }
 
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'KONNET API',
-    'DESCRIPTION': 'A service marketplace platform that connects customers with service providers for various services.',
-    'VERSION': '1.0.0',
-    'SERVE_INCLUDE_SCHEMA': False,
+    "TITLE": "KONNET API",
+    "DESCRIPTION": "A service marketplace platform that connects customers with service providers for various services.",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
     # OTHER SETTINGS
 }
