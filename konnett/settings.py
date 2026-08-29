@@ -42,12 +42,18 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # filter
     "django_filters",
+    # DRF
     "rest_framework",
+    # DRF AUTH(JWT)
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
+    # API perfomance monitor
     "silk",
+    # API documentation
     "drf_spectacular",
+    # APPS
     "apps.core.apps.CoreConfig",
     "apps.accounts.apps.AccountsConfig",
     "apps.customers.apps.CustomersConfig",
