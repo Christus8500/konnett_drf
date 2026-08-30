@@ -1,3 +1,5 @@
+from django.conf import settings
+
 from rest_framework import mixins, viewsets, generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -5,6 +7,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 
 from drf_spectacular.utils import extend_schema
+
+from apps.core.utils import get_cache, set_cache
 
 from apps.accounts.serializers import (
     LoginResponseSerializer,
@@ -27,6 +31,20 @@ class UserViewSet(
     serializer_class = UserSerializer
     permission_classes = [IsAdminUser]
     http_method_names = ["get", "delete"]
+
+    def list(self, request, *args, **kwargs):
+        cache_key = "admin:users"
+
+        cached_data = get_cache(cache_key)
+        if cached_data is not None:
+            return Response(cached_data)
+
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+
+        set_cache(cache_key, serializer.data, timeout=settings.BIG_CACHE_TIMEOUT)
+
+        return Response(serializer.data)
 
 
 # RegisterView: A view for handling user registration requests. Only accessible by any user.
@@ -87,3 +105,23 @@ class UserView(generics.RetrieveAPIView):
 
     def get_object(self):
         return self.request.user
+
+    def retrieve(self, request, *args, **kwargs):
+        user_id = request.user.id
+        cache_key = f"user:{user_id}"
+
+        cached_data = get_cache(cache_key)
+
+        if cached_data is not None:
+            return Response(cached_data)
+
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+
+        set_cache(
+            cache_key,
+            serializer.data,
+            timeout=settings.BIG_CACHE_TIMEOUT,
+        )
+
+        return Response(serializer.data)

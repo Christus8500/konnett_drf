@@ -88,7 +88,7 @@ class UserTransactionView(generics.ListAPIView):
         queryset = self.filter_queryset(self.get_queryset())
         serializer = self.get_serializer(queryset, many=True)
 
-        set_cache(cache_key, serializer.data, timeout=3600)
+        set_cache(cache_key, serializer.data, timeout=settings.MEDIUM_CACHE_TIMEOUT)
 
         return Response(serializer.data)
 
@@ -337,7 +337,7 @@ class WithdrawalRequestListCreateView(
         queryset = self.filter_queryset(self.get_queryset())
         serializer = self.get_serializer(queryset, many=True)
 
-        set_cache(cache_key, serializer.data, timeout=settings.CACHE_TIMEOUT)
+        set_cache(cache_key, serializer.data, timeout=settings.SMALL_CACHE_TIMEOUT)
 
         return Response(serializer.data)
 

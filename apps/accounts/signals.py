@@ -1,5 +1,6 @@
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
+from django.core.cache import cache
 
 from apps.core.choices import UserRole
 from apps.accounts.models import User
@@ -12,7 +13,13 @@ from apps.konnett_points.models import PointWallet
 # If the user is a customer, a CustomerProfile is created. If the user is a provider, a ProviderProfile is created with the business name set to the user's full name.
 # A wallet is also created for every new user, except for administrators.
 @receiver(post_save, sender=User)
-def create_user_profile_and_wallet(sender, instance, created, **kwargs):
+def user_saved(sender, instance, created, **kwargs):
+
+    # Clear caches whenever a user is created or updated
+    cache.delete("admin:users")
+    cache.delete(f"user:{instance.id}")
+
+    # Only create profiles/wallet for newly created users
     if not created:
         return
 
@@ -26,5 +33,12 @@ def create_user_profile_and_wallet(sender, instance, created, **kwargs):
 
     elif instance.role == UserRole.PROVIDER:
         ProviderProfile.objects.create(
-            user=instance, business_name=f"{instance.first_name} {instance.last_name}"
+            user=instance,
+            business_name=f"{instance.first_name} {instance.last_name}",
         )
+
+
+@receiver(post_delete, sender=User)
+def user_deleted(sender, instance, **kwargs):
+    cache.delete("admin:users")
+    cache.delete(f"user:{instance.id}")

@@ -59,7 +59,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
 
         queryset = self.filter_queryset(self.get_queryset())
         serializer = self.get_serializer(queryset, many=True)
-        set_cache(cache_key, serializer.data, timeout=settings.CACHE_TIMEOUT)
+        set_cache(cache_key, serializer.data, timeout=settings.SMALL_CACHE_TIMEOUT)
 
         return Response(serializer.data)
 
@@ -107,7 +107,7 @@ class ListCreateServiceView(generics.ListCreateAPIView):
 
         queryset = self.filter_queryset(self.get_queryset())
         serializer = self.get_serializer(queryset, many=True)
-        set_cache(cache_key, serializer.data, timeout=settings.CACHE_TIMEOUT)
+        set_cache(cache_key, serializer.data, timeout=settings.SMALL_CACHE_TIMEOUT)
 
         return Response(serializer.data)
 
@@ -162,7 +162,7 @@ class MyServiceListView(generics.ListAPIView):
         set_cache(
             cache_key,
             serializer.data,
-            timeout=settings.CACHE_TIMEOUT,
+            timeout=settings.SMALL_CACHE_TIMEOUT,
         )
 
         return Response(serializer.data)
