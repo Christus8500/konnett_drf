@@ -32,6 +32,13 @@ class JobRequestImageSerializer(serializers.ModelSerializer):
         read_only_fields = ["id"]
 
 
+class JobConfirmCompletionSerializer(serializers.Serializer):
+    rating = serializers.IntegerField(
+        min_value=1,
+        max_value=5
+    )
+
+
 class JobCompletionImageSerializer(serializers.Serializer):
     images = serializers.ListField(
         child=serializers.ImageField(validators=[validate_image]),
@@ -47,6 +54,7 @@ class JobRequestOfferSerializer(serializers.ModelSerializer):
                 "business_name",
                 "years_of_experience",
                 "average_rating",
+                "ratings_count",
                 "completed_jobs",
                 "profile_image",
             ]

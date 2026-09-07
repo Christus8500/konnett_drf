@@ -37,6 +37,7 @@ class ProviderProfile(UUIDModel, TimeStampedModel):
 
     years_of_experience = models.PositiveIntegerField(default=0)
     average_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
+    ratings_count = models.PositiveIntegerField(default=0)
     completed_jobs = models.PositiveIntegerField(default=0)
 
     address = models.ForeignKey(

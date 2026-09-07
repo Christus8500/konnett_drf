@@ -1,5 +1,5 @@
 from django.db import transaction
-from django.db.models import F, Prefetch
+from django.db.models import F, Prefetch, Avg
 from django.shortcuts import get_object_or_404
 
 from django_filters.rest_framework import DjangoFilterBackend
@@ -29,6 +29,7 @@ from apps.jobs.models import (
     JobRequestOffer,
     JobDispute,
     JobCompletionImage,
+    ProviderRating,
 )
 from apps.jobs.mixins import JobRequestMixin, ProviderMixin
 from apps.jobs.serializers import (
@@ -36,6 +37,7 @@ from apps.jobs.serializers import (
     JobRequestWriteSerializer,
     JobRequestImageSerializer,
     JobCompletionImageSerializer,
+    JobConfirmCompletionSerializer,
     JobRequestOfferSerializer,
     JobDisputeSerializer,
     AdminJobDisputeSerializer,
@@ -159,6 +161,9 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
 
         reserve_job_points(job)
 
+        # TODO:
+        # Notify customer
+
     # ^ partial_update updates a job request instance.
     # It ensures that the job is still pending before allowing the update.
     # If the job is not pending, an error message is returned.
@@ -176,6 +181,9 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
         if job.points_amount != old_points_amount:
             adjust_reserved_points(job, old_points_amount)
 
+        # TODO:
+        # Notify customer
+
         return response
 
     # ^ destroy cancels a job request instance.
@@ -190,6 +198,9 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
         job.save(update_fields=["status"])
 
         release_reserved_points(job, transaction_type=TransactionType.UNLOCK)
+
+        # TODO:
+        # Notify customer and providers if any
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -320,7 +331,7 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
         return [ScopedRateThrottle(scope="job_offers")]
 
     def create(self, request, *args, **kwargs):
-        # Provider's get request doesn't have ajob_id
+        # Provider's get request doesn't have a job_id
         # This disables the provider from sending a post request w/o including a job_id
         if "pk" not in self.kwargs:
             return Response(
@@ -349,6 +360,9 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
             job=job,
             provider=request.user.provider_profile,
         )
+
+        # TODO:
+        # Notify the job owner, of a new offer
 
         return Response(
             serializer.data,
@@ -404,7 +418,7 @@ class JobOfferAcceptView(JobRequestMixin, ProviderMixin, APIView):
         # Notify the accepted provider.
 
         # TODO:
-        # Notify all rejected providers.
+        # Notify all rejected providers if any.
 
         return Response({"detail": "Offer accepted."}, status=status.HTTP_200_OK)
 
@@ -443,6 +457,9 @@ class JobOfferRejectView(JobRequestMixin, ProviderMixin, APIView):
 
         offer.status = JobOfferStatus.REJECTED
         offer.save(update_fields=["status"])
+
+        # TODO:
+        # Notify rejected provider
 
         return Response(
             {"detail": "Offer rejected."},
@@ -588,6 +605,9 @@ class JobRequestCompletionView(JobRequestMixin, ProviderMixin, APIView):
         job.status = JobRequestStatus.AWAITING_CONFIRMATION
         job.save(update_fields=["status"])
 
+        # TODO
+        # Notify job owner of a completion request
+
         return Response(
             {"detail": ("Completion request sent successfully.")},
             status=status.HTTP_200_OK,
@@ -622,6 +642,9 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
             job, "Only the jobs awaiting completion can be completed"
         )
 
+        serializer = JobConfirmCompletionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
         offer = JobRequestOffer.objects.select_related(
             "provider",
             "provider__user",
@@ -630,16 +653,53 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
             status=JobOfferStatus.ACCEPTED,
         )
 
+        provider = offer.provider
+
+        # Create the rating for this completed job.
+        ProviderRating.objects.create(
+            job=job,
+            provider=provider,
+            customer=job.customer,
+            rating=serializer.validated_data["rating"],
+        )
+
+        # Recalculate the provider's average rating.
+        average_rating = (
+            ProviderRating.objects.filter(provider=provider).aggregate(
+                average=Avg("rating")
+            )["average"]
+            or 0
+        )
+
+        # Update provider rating statistics.
+        provider.average_rating = average_rating
+        provider.ratings_count = ProviderRating.objects.filter(
+            provider=provider
+        ).count()
+        provider.completed_jobs = F("completed_jobs") + 1
+        provider.save(
+            update_fields=[
+                "average_rating",
+                "ratings_count",
+                "completed_jobs",
+            ]
+        )
+
         job.status = JobRequestStatus.COMPLETED
         job.save(update_fields=["status"])
 
         pay_provider(job, offer)
 
-        offer.provider.completed_jobs = F("completed_jobs") + 1
-        offer.provider.save(update_fields=["completed_jobs"])
+        # TODO:
+        # Notify provider of completed job
 
         return Response(
-            {"detail": "Job completed successfully."},
+            {
+                "detail": "Job completed successfully.",
+                "rating": serializer.validated_data["rating"],
+                "provider_average_rating": provider.average_rating,
+                "provider_ratings_count": provider.ratings_count,
+            },
             status=status.HTTP_200_OK,
         )
 
@@ -686,6 +746,8 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
         # TODO:
         # Notify administrators that a dispute
         # has been opened.
+        #
+        # Notify provider of the dispute
 
         return Response(
             serializer.data,

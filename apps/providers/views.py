@@ -10,6 +10,7 @@ from drf_spectacular.utils import extend_schema
 
 from apps.core.permissions import IsProvider
 from apps.core.choices import ProviderVerificationStatus
+from apps.core.utils import get_cache, set_cache
 
 from apps.providers.models import ProviderProfile, ProviderVerification
 from apps.providers.serializers import (
@@ -31,6 +32,26 @@ class ProviderProfileView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         return self.get_queryset().get(user=self.request.user)
+
+    def retrieve(self, request, *args, **kwargs):
+        user_id = request.user.id
+        cache_key = f"provider:profile:{user_id}"
+
+        cached_data = get_cache(cache_key)
+
+        if cached_data is not None:
+            return Response(cached_data)
+
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+
+        set_cache(
+            cache_key,
+            serializer.data,
+            timeout=settings.BIG_CACHE_TIMEOUT,
+        )
+
+        return Response(serializer.data)
 
 
 # View for retrieving and updating the ProviderVerification instance associated with a specific provider.
@@ -111,6 +132,9 @@ def update_provider_verification_status(request, provider_id):
     previous_status = verification.status
     verification.status = verification_status
     verification.save(update_fields=["status"])
+
+    # TODO:
+    # Send verification successful email
 
     return Response(
         {

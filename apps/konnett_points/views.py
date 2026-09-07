@@ -116,6 +116,9 @@ class PointPurchaseView(generics.CreateAPIView):
         response_serializer = self.get_serializer(purchase)
         headers = self.get_success_headers(response_serializer.data)
 
+        # TODO:
+        # Notify user of initiated purchase
+
         return Response(
             response_serializer.data, status=status.HTTP_201_CREATED, headers=headers
         )
@@ -243,6 +246,9 @@ class PointPurchaseVerificationView(APIView):
             transaction_type=TransactionType.PURCHASE,
             purchase=purchase,
         )
+
+        # TODO:
+        # Send successful purchase email
 
         return Response(
             {
@@ -467,6 +473,9 @@ class WithdrawalApproveView(generics.UpdateAPIView):
             ]
         )
 
+        # TODO:
+        # Send successful withdrawal email
+
         return Response(
             self.get_serializer(withdrawal).data,
             status=status.HTTP_200_OK,
@@ -536,6 +545,9 @@ class WithdrawalRejectView(generics.UpdateAPIView):
                 "processed_at",
             ]
         )
+
+        # TODO:
+        # Notify the provider
 
         return Response(
             self.get_serializer(withdrawal).data,

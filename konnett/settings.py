@@ -61,6 +61,7 @@ INSTALLED_APPS = [
     "apps.services.apps.ServicesConfig",
     "apps.jobs.apps.JobsConfig",
     "apps.konnett_points.apps.KonnettPointsConfig",
+    "apps.mails.apps.MailsConfig",
 ]
 
 AUTH_USER_MODEL = "accounts.User"

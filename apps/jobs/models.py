@@ -1,7 +1,7 @@
 from django.db import models
 from django.utils import timezone
 from django.conf import settings
-from django.core.validators import MinValueValidator
+from django.core.validators import MinValueValidator, MaxValueValidator
 
 from apps.core.choices import JobRequestStatus, JobOfferStatus, JobDisputeDecision
 from apps.core.models import UUIDModel, TimeStampedModel
@@ -148,3 +148,34 @@ class JobDispute(UUIDModel):
 
     def __str__(self):
         return f"Dispute - {self.job.title}"
+
+
+class ProviderRating(UUIDModel, TimeStampedModel):
+    job = models.OneToOneField(
+        JobRequest,
+        on_delete=models.CASCADE,
+        related_name="provider_rating",
+    )
+
+    provider = models.ForeignKey(
+        "providers.ProviderProfile",
+        on_delete=models.CASCADE,
+        related_name="ratings",
+    )
+
+    customer = models.ForeignKey(
+        "customers.CustomerProfile",
+        on_delete=models.CASCADE,
+        related_name="provider_ratings",
+    )
+
+    rating = models.PositiveSmallIntegerField(
+        validators=[
+            MinValueValidator(1),
+            MaxValueValidator(5),
+        ]
+    )
+
+    def __str__(self):
+        return f"{self.provider} - {self.rating}/5"
+    

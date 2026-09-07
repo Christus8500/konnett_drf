@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.db import transaction
 
 from rest_framework import mixins, viewsets, generics, status
 from rest_framework.response import Response
@@ -17,6 +18,8 @@ from apps.accounts.serializers import (
     UserSerializer,
 )
 from apps.accounts.models import User
+
+from apps.mails.services import create_mailbox_message
 
 
 # Create your views here.
@@ -53,12 +56,22 @@ class RegisterView(generics.CreateAPIView):
     permission_classes = [AllowAny]
 
     # Overriding create() to handle user registration. It validates the incoming data, creates a new user instance, generates JWT tokens for the user, and returns a response with the created user's data and tokens.
+    @transaction.atomic
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
 
         refresh = RefreshToken.for_user(user)
+
+        # TODO:
+        # Send email to new user
+
+        create_mailbox_message(
+            user=user,
+            subject="Account Created",
+            body="Your account was created succesfully"
+        )
 
         return Response(
             {
