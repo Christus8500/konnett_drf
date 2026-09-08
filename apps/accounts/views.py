@@ -1,5 +1,8 @@
 from django.conf import settings
 from django.db import transaction
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.encoding import force_str
+from django.utils.http import urlsafe_base64_decode
 
 from rest_framework import mixins, viewsets, generics, status
 from rest_framework.response import Response
@@ -18,6 +21,7 @@ from apps.accounts.serializers import (
     UserSerializer,
 )
 from apps.accounts.models import User
+from apps.accounts.utils import send_verification_email
 
 from apps.mails.services import create_mailbox_message
 
@@ -64,13 +68,12 @@ class RegisterView(generics.CreateAPIView):
 
         refresh = RefreshToken.for_user(user)
 
-        # TODO:
-        # Send email to new user
+        send_verification_email(user)
 
         create_mailbox_message(
             user=user,
             subject="Account Created",
-            body="Your account was created succesfully"
+            body="Your account was created succesfully",
         )
 
         return Response(
@@ -138,3 +141,57 @@ class UserView(generics.RetrieveAPIView):
         )
 
         return Response(serializer.data)
+
+
+class VerifyEmailView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        uid = request.query_params.get("uid")
+        token = request.query_params.get("token")
+
+        if not uid or not token:
+            return Response(
+                {"error": "Invalid verification link."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            user_id = force_str(urlsafe_base64_decode(uid))
+
+            user = User.objects.get(pk=user_id)
+
+        except (
+            TypeError,
+            ValueError,
+            OverflowError,
+            User.DoesNotExist,
+        ):
+            return Response(
+                {"error": "Invalid verification link."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if user.email_verified:
+            return Response(
+                {"message": "Email is already verified."},
+                status=status.HTTP_200_OK,
+            )
+
+        if not default_token_generator.check_token(
+            user,
+            token,
+        ):
+            return Response(
+                {"error": "Invalid or expired verification link."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user.email_verified = True
+
+        user.save(update_fields=["email_verified"])
+
+        return Response(
+            {"message": "Email verified successfully."},
+            status=status.HTTP_200_OK,
+        )

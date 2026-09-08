@@ -11,7 +11,10 @@ from apps.core.choices import UserRole
 # User: A custom user model extending AbstractBaseUser and PermissionsMixin, representing a user in the system.
 class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel, UUIDModel):
     email = models.EmailField(unique=True)
+    email_verified = models.BooleanField(default=False)
+
     phone_number = models.CharField(max_length=20, blank=True)
+
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100)
 

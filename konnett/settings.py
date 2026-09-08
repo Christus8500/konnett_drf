@@ -32,6 +32,8 @@ DEBUG = True
 
 ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "").split(",")
 
+BACKEND_URL = os.getenv("BACKEND_URL")
+
 
 # Application definition
 
@@ -126,6 +128,33 @@ CACHES = {
 SMALL_CACHE_TIMEOUT = 60*15
 MEDIUM_CACHE_TIMEOUT = 60*60
 BIG_CACHE_TIMEOUT = 60*60*24
+
+
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+
+EMAIL_HOST = os.getenv("EMAIL_HOST")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", 587))
+
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
+
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True").lower() == "true"
+EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "False").lower() == "true"
+
+DEFAULT_FROM_EMAIL = os.getenv(
+    "DEFAULT_FROM_EMAIL",
+    "noreply@yourdomain.com",
+)
+
+DEFAULT_FROM_NAME = os.getenv(
+    "DEFAULT_FROM_NAME",
+    "Konnett Admin",
+)
+
+EMAIL_REPLY_TO = os.getenv(
+    "EMAIL_REPLY_TO",
+    DEFAULT_FROM_EMAIL,
+)
 
 
 # Password validation
