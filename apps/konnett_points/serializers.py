@@ -8,12 +8,13 @@ from apps.konnett_points.models import (
     PointPurchase,
     PointTransaction,
     WithdrawalRequest,
+    ApprovedWithdrawalRequest,
 )
 
 from apps.providers.models import ProviderProfile
 
 
-# UserPointWalletSerializer serializes the PointWallet model, 
+# UserPointWalletSerializer serializes the PointWallet model,
 # including the user's email and available/locked points.
 class UserPointWalletSerializer(serializers.ModelSerializer):
     user = serializers.CharField(source="user.email", read_only=True)
@@ -24,7 +25,7 @@ class UserPointWalletSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-# PointPurchaseSerializer serializes the PointPurchase model, 
+# PointPurchaseSerializer serializes the PointPurchase model,
 # including customer details and purchase information.
 class PointPurchaseSerializer(serializers.ModelSerializer):
     customer_fullname = serializers.CharField(
@@ -115,7 +116,9 @@ class PointTransactionSerializer(serializers.ModelSerializer):
 class WithdrawalRequestSerializer(serializers.ModelSerializer):
     class ProviderInfoSerializer(serializers.ModelSerializer):
         provider_email = serializers.CharField(source="user.email", read_only=True)
-        provider_phone_number = serializers.CharField(source="user.phone_number", read_only=True)
+        provider_phone_number = serializers.CharField(
+            source="user.phone_number", read_only=True
+        )
 
         class Meta:
             model = ProviderProfile
@@ -152,4 +155,14 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
             "created_at",
             "processed_by",
             "processed_at",
+        ]
+
+
+class ApprovedWithdrawalRequestSerializer(serializers.ModelSerializer):
+    withdrawal = WithdrawalRequestSerializer(read_only=True)
+
+    class Meta:
+        model = ApprovedWithdrawalRequest
+        fields = [
+            "withdrawal",
         ]

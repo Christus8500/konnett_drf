@@ -23,3 +23,28 @@ class MailboxMessage(UUIDModel, TimeStampedModel):
 
     def __str__(self):
         return f"{self.subject} - {self.user}"
+
+
+class EmailOutbox(models.Model):
+    idempotency_key = models.CharField(
+        max_length=255,
+        unique=True,
+    )
+    recipient = models.EmailField()
+    purchase = models.ForeignKey(
+        "konnett_points.PointPurchase",
+        on_delete=models.PROTECT,
+    )
+    email_type = models.CharField(max_length=100)
+    status = models.CharField(
+        max_length=20,
+        default="pending",
+    )
+    attempts = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["status", "created_at"]),
+        ]

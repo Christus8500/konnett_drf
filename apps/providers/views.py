@@ -134,6 +134,7 @@ def update_provider_verification_status(request, provider_id):
     verification.save(update_fields=["status"])
 
     # TODO:
+    # -- BACKGROUND TASK --
     # Send verification successful email
 
     return Response(

@@ -37,3 +37,7 @@ class Address(UUIDModel):
         null=True,
         blank=True,
     )
+
+    def __str__(self):
+        return f"{self.address}, {self.city}, {self.state}"
+    

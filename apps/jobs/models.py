@@ -95,6 +95,9 @@ class JobCompletionImage(UUIDModel):
         return f"Completion image for {self.job}, by {self.provider}"
 
 
+# TODO: 
+# Let the provider know ofor see the admin fee,
+# 10% of the job points
 class JobRequestOffer(UUIDModel, TimeStampedModel):
     job = models.ForeignKey(
         JobRequest, on_delete=models.CASCADE, related_name="job_offers"

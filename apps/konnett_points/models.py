@@ -77,6 +77,8 @@ class WithdrawalRequest(UUIDModel, TimeStampedModel):
         default=WithdrawalStatus.PENDING,
         db_index=True,
     )
+    withdrawal_reference = models.CharField(max_length=100, unique=True)
+
     processed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -85,7 +87,8 @@ class WithdrawalRequest(UUIDModel, TimeStampedModel):
         related_name="processed_withdrawal_request",
     )
     processed_at = models.DateTimeField(blank=True, null=True)
-    withdrawal_reference = models.CharField(max_length=100, unique=True)
+
+    reject_reason = models.TextField(blank=True, null=True)
 
     def save(self, *args, **kwargs):
         if self.processed_by and self.processed_at is None:
@@ -94,6 +97,21 @@ class WithdrawalRequest(UUIDModel, TimeStampedModel):
 
     def __str__(self):
         return f"{self.provider} requested {self.points}points withdrawal"
+
+
+class ApprovedWithdrawalRequest(UUIDModel):
+    withdrawal = models.ForeignKey(
+        WithdrawalRequest,
+        on_delete=models.CASCADE,
+        related_name="approved_withdrawal_request",
+    )
+    paid = models.BooleanField(default=False)
+    paid_on = models.DateTimeField(blank=True, null=True)
+
+    def save(self, *args, **kwargs):
+        if self.paid and self.paid_on is None:
+            self.paid_on = timezone.now()
+        super().save(*args, **kwargs)
 
 
 # PointTransaction model represents a transaction of points in a user's PointWallet.

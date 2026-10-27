@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404
 
 from django_filters.rest_framework import DjangoFilterBackend
 
-from rest_framework import generics, mixins, status
+from rest_framework import generics, mixins, status, viewsets
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAdminUser, IsAuthenticated, AllowAny
@@ -28,12 +28,14 @@ from apps.konnett_points.models import (
     PointPurchase,
     PointTransaction,
     WithdrawalRequest,
+    ApprovedWithdrawalRequest,
 )
 from apps.konnett_points.serializers import (
     UserPointWalletSerializer,
     PointPurchaseSerializer,
     PointTransactionSerializer,
     WithdrawalRequestSerializer,
+    ApprovedWithdrawalRequestSerializer,
 )
 from apps.konnett_points.utils import (
     create_point_purchase_record,
@@ -45,6 +47,18 @@ from apps.konnett_points.utils import (
     deduct_locked_points,
 )
 from apps.konnett_points.filters import PointTransactionFilter, WithdrawalRequestFilter
+from apps.konnett_points.notifications import (
+    create_point_purchase_failed_notification,
+    create_point_purchase_initiated_notification,
+    create_point_purchase_successful_notification,
+    create_point_purchase_successful_notification,
+    create_withdrawal_request_received_notification,
+    send_point_purchase_failed_email,
+    send_point_purchase_successful_email,
+    send_withdrawal_email,
+)
+
+from apps.mails.models import EmailOutbox
 
 # Create your views here.
 
@@ -100,6 +114,7 @@ class PointPurchaseView(generics.CreateAPIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "point_purchase"
 
+    @transaction.atomic
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -116,8 +131,13 @@ class PointPurchaseView(generics.CreateAPIView):
         response_serializer = self.get_serializer(purchase)
         headers = self.get_success_headers(response_serializer.data)
 
-        # TODO:
+        # -- BACKGROUND TASK --
         # Notify user of initiated purchase
+        transaction.on_commit(
+            lambda: create_point_purchase_initiated_notification(
+                user=purchase.customer.user, purchase=purchase
+            )
+        )
 
         return Response(
             response_serializer.data, status=status.HTTP_201_CREATED, headers=headers
@@ -163,9 +183,7 @@ class PointPurchaseVerificationView(APIView):
         # Lock the purchase record for update to prevent race conditions during verification.
         purchase = (
             PointPurchase.objects.select_for_update()
-            .select_related(
-                "customer__user",
-            )
+            .select_related("customer__user")
             .filter(payment_reference=payment_reference)
             .first()
         )
@@ -191,6 +209,22 @@ class PointPurchaseVerificationView(APIView):
                 purchase,
                 PaymentStatus.FAILED,
             )
+
+            # -- BACKGROUND TASK --
+            # Notify user of failed purchase
+            transaction.on_commit(
+                lambda: create_point_purchase_failed_notification(
+                    user=purchase.customer.user, purchase=purchase
+                )
+            )
+            # -- BACKGROUND TASK --
+            # Send failed purchase email
+            transaction.on_commit(
+                lambda: send_point_purchase_failed_email(
+                    user=purchase.customer.user, purchase=purchase
+                )
+            )
+
             return Response(
                 {"detail": "Purchase marked as failed."},
                 status=status.HTTP_200_OK,
@@ -248,7 +282,36 @@ class PointPurchaseVerificationView(APIView):
         )
 
         # TODO:
+        # Create an email-sending processor that picks up pending EmailOutbox records and tries to send them.
+        # If successful, mark the EmailOutbox record as sent
+        # otherwise, increment the attempts count and retry later.
+        # Use celery to run the email-sending processor in the background, and set up a periodic task to check for pending emails and send them.
+        # Record the email to be sent.
+        EmailOutbox.objects.get_or_create(
+            idempotency_key=f"point-purchase-success:{purchase.pk}",
+            defaults={
+                "recipient": purchase.customer.user.email,
+                "purchase": purchase,
+                "email_type": "point_purchase_successful",
+                "status": "pending",
+            },
+        )
+
+        # TODO:
+        # -- BACKGROUND TASK (Later with the email-sending processor)--
+        # Notify user of successful purchase
+        transaction.on_commit(
+            lambda: create_point_purchase_successful_notification(
+                user=purchase.customer.user, purchase=purchase
+            )
+        )
+        # -- BACKGROUND TASK --
         # Send successful purchase email
+        transaction.on_commit(
+            lambda: send_point_purchase_successful_email(
+                user=purchase.customer.user, purchase=purchase
+            )
+        )
 
         return Response(
             {
@@ -267,9 +330,10 @@ class WithdrawalRequestListCreateView(
     generics.GenericAPIView,
 ):
     queryset = WithdrawalRequest.objects.all()
-    serializer_class = WithdrawalRequestSerializer    
+    serializer_class = WithdrawalRequestSerializer
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_class = WithdrawalRequestFilter
+    throttle_scope = "withdrawals"
 
     def get_permissions(self):
         if self.request.method == "POST":
@@ -324,6 +388,14 @@ class WithdrawalRequestListCreateView(
             withdrawal_request=withdrawal,
         )
 
+        # -- BACKGROUNF TASK ---
+        # Notify the provider
+        transaction.commit(
+            lambda: create_withdrawal_request_received_notification(
+                user=request.user, points_to_withdraw=points_to_withdraw
+            )
+        )
+
         return Response(
             self.get_serializer(withdrawal).data,
             status=status.HTTP_201_CREATED,
@@ -334,7 +406,9 @@ class WithdrawalRequestListCreateView(
             cache_key = "withdrawal_requests:admin:pending"
         else:
             provider_id = request.user.provider_profile.id
-            cache_key = f"withdrawal_requests:provider:{provider_id}:{request.GET.urlencode()}"
+            cache_key = (
+                f"withdrawal_requests:provider:{provider_id}:{request.GET.urlencode()}"
+            )
 
         cached_data = get_cache(cache_key)
         if cached_data is not None:
@@ -369,7 +443,7 @@ class WithdrawalRequestListCreateView(
     def get_throttles(self):
         if self.request.method == "GET":
             return [UserRateThrottle()]
-        return [ScopedRateThrottle(scope="withdrawals")]
+        return [ScopedRateThrottle()]
 
 
 # WithdrawalRequestRetrieveView retrieves a specific withdrawal request based on the provided ID.
@@ -473,8 +547,15 @@ class WithdrawalApproveView(generics.UpdateAPIView):
             ]
         )
 
-        # TODO:
-        # Send successful withdrawal email
+        # -- BACKGROUND TASK --
+        # Send withdrawal approved email
+        transaction.on_commit(
+            lambda: send_withdrawal_email(
+                user=withdrawal.provider.user,
+                withdrawal=withdrawal,
+                status=WithdrawalStatus.APPROVED
+            )
+        )
 
         return Response(
             self.get_serializer(withdrawal).data,
@@ -546,10 +627,65 @@ class WithdrawalRejectView(generics.UpdateAPIView):
             ]
         )
 
-        # TODO:
-        # Notify the provider
+        # -- BACKGROUND TASK --
+        # Send withdrawal rejected email
+        transaction.on_commit(
+            lambda: send_withdrawal_email(
+                user=withdrawal.provider.user,
+                withdrawal=withdrawal,
+                status=WithdrawalStatus.REJECTED,
+                reject_reason=withdrawal.reject_reason or None
+            )
+        )
 
         return Response(
             self.get_serializer(withdrawal).data,
             status=status.HTTP_200_OK,
         )
+
+
+class ApprovedWithdrawalRequestViewset(viewsets.ModelViewSet):
+    queryset = ApprovedWithdrawalRequest.objects.filter(paid=False)
+    serializer_class = ApprovedWithdrawalRequestSerializer
+    http_method_names = ["get"]
+    permission_classes = [IsAdminUser]
+
+
+class ApprovedWithdrawalRequestPaidView(generics.UpdateAPIView):
+    queryset = ApprovedWithdrawalRequest.objects.all()
+    serializer_class = ApprovedWithdrawalRequestSerializer
+    permission_classes = [IsAdminUser]
+    http_method_names = ["patch"]
+
+    @transaction.atomic
+    def patch(self, request, *args, **kwargs):
+        approved_withdrawal = get_object_or_404(
+            ApprovedWithdrawalRequest.objects.select_for_update().select_related(
+                "withdrawal"
+            ),
+            pk=kwargs["pk"],
+        )
+
+        approved_withdrawal.paid = True
+
+        approved_withdrawal.save(
+            update_fields=[
+                "paid",
+            ]
+        )
+
+        withdrawal = approved_withdrawal.withdrawal
+        withdrawal.status = WithdrawalStatus.PAID
+        withdrawal.save(update_fields=["status"])
+
+        # -- BACKGROUND TASK --
+        # Send withdrawal paid email
+        transaction.on_commit(
+            lambda: send_withdrawal_email(
+                user=withdrawal.provider.user,
+                withdrawal=withdrawal,
+                status=WithdrawalStatus.PAID
+            )
+        )
+
+        return Response(self.get_serializer(approved_withdrawal).data)

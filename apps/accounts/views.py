@@ -68,13 +68,18 @@ class RegisterView(generics.CreateAPIView):
 
         refresh = RefreshToken.for_user(user)
 
-        send_verification_email(user)
-
-        create_mailbox_message(
-            user=user,
-            subject="Account Created",
-            body="Your account was created succesfully",
+        # -- BACKGROUND TASK
+        transaction.on_commit(
+            lambda: create_mailbox_message(
+                user=user,
+                subject="Account Created",
+                body="Your account was created successfully",
+            )
         )
+
+        # Send verification email after the transaction is committed i.e., after the user is successfully created in the database. This ensures that the email is only sent if the user creation is successful.
+        # -- BACKGROUND TASK
+        transaction.on_commit(lambda: send_verification_email(user))
 
         return Response(
             {

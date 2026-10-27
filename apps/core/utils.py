@@ -65,6 +65,16 @@ def delete_cache(key):
 
 # -- Email Sending
 # email sending function that uses Django's EmailMultiAlternatives to send emails with optional HTML content, attachments, and various email headers.
+def _normalize_emails(value):
+    if not value:
+        return []
+
+    if isinstance(value, str):
+        return [value]
+
+    return list(value)
+
+
 def send_email(
     *,
     subject,
@@ -78,11 +88,13 @@ def send_email(
     bcc=None,
     attachments=None,
 ):
-    if isinstance(to, str):
-        to = [to]
+    to = _normalize_emails(to)
+
+    if not to:
+        raise ValueError("At least one recipient email address is required.")
 
     sender_email = from_email or settings.DEFAULT_FROM_EMAIL
-    sender_name = from_name or settings.DEFAULT_FROM_NAME
+    sender_name = from_name or getattr(settings, "DEFAULT_FROM_NAME", "")
 
     formatted_sender = formataddr((sender_name, sender_email))
 
@@ -91,24 +103,15 @@ def send_email(
         body=text_content,
         from_email=formatted_sender,
         to=to,
-        cc=cc or [],
-        bcc=bcc or [],
+        cc=_normalize_emails(cc),
+        bcc=_normalize_emails(bcc),
+        reply_to=_normalize_emails(reply_to),
     )
 
-    if reply_to:
-        if isinstance(reply_to, str):
-            reply_to = [reply_to]
-
-        email.reply_to = reply_to
-
     if html_content:
-        email.attach_alternative(
-            html_content,
-            "text/html",
-        )
+        email.attach_alternative(html_content, "text/html")
 
-    if attachments:
-        for attachment in attachments:
-            email.attach(*attachment)
+    for attachment in attachments or []:
+        email.attach(*attachment)
 
-    return email.send()
+    return email.send(fail_silently=False)

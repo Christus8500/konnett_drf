@@ -1,3 +1,5 @@
+from functools import partial
+
 from django.db import transaction
 from django.db.models import F, Prefetch, Avg
 from django.shortcuts import get_object_or_404
@@ -20,8 +22,16 @@ from rest_framework.throttling import (
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 
 from apps.core.permissions import IsCustomer, IsCustomerOwner, IsVerifiedProvider
-from apps.core.choices import JobRequestStatus, JobOfferStatus, JobDisputeDecision
+from apps.core.choices import (
+    JobRequestStatus,
+    JobOfferStatus,
+    JobDisputeDecision,
+    TransactionType,
+    UserRole,
+)
 from apps.core.constants import MAX_JOB_COMPLETION_IMAGES, MAX_JOB_REQUEST_IMAGES
+
+from apps.accounts.models import User
 
 from apps.jobs.models import (
     JobRequest,
@@ -43,6 +53,22 @@ from apps.jobs.serializers import (
     AdminJobDisputeSerializer,
 )
 from apps.jobs.filters import JobFilter
+from apps.jobs.notifications import (
+    create_dispute_cancelled_provider_notification,
+    create_dispute_opened_admin_notification,
+    create_dispute_opened_notification,
+    create_dispute_refunded_customer_notification,
+    create_dispute_released_customer_notification,
+    create_dispute_released_provider_notification,
+    create_job_completion_approved_notification,
+    create_job_completion_request_notification,
+    create_job_created_notification,
+    create_job_new_offer_notification,
+    create_job_offer_accepted_notification,
+    create_job_offer_rejected_notification,
+    create_job_updated_notification,
+    create_job_cancelled_notification,
+)  # , send_job_created_email
 
 from apps.konnett_points.utils import (
     pay_provider,
@@ -50,6 +76,8 @@ from apps.konnett_points.utils import (
     adjust_reserved_points,
     release_reserved_points,
 )
+
+from apps.mails.services import create_mailbox_message
 
 # Create your views here.
 
@@ -67,6 +95,7 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
     filterset_class = JobFilter
     search_fields = ["title", "description"]
     ordering_fields = ["created_at", "points_amount"]
+    throttle_scope = "job_mutations"
 
     # ^ get_queryset retrieves the queryset of JobRequest instances based on the authenticated user's role.
     # If the user is a staff member, all job requests are returned.
@@ -139,13 +168,13 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
                 return [AnonRateThrottle()]
 
         if self.action in ["create", "partial_update", "destroy"]:
-            return [ScopedRateThrottle(scope="job_mutations")]
+            return [ScopedRateThrottle()]
 
         return super().get_throttles()
 
     @transaction.atomic
     def perform_create(self, serializer):
-        images = serializer.validated_data.pop("images")
+        images = serializer.validated_data.pop("images", [])
 
         job = serializer.save(customer=self.request.user.customer_profile)
 
@@ -161,8 +190,11 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
 
         reserve_job_points(job)
 
-        # TODO:
         # Notify customer
+        # -- BACKGROUND TASK
+        transaction.on_commit(
+            lambda: create_job_created_notification(user=self.request.user, job=job)
+        )
 
     # ^ partial_update updates a job request instance.
     # It ensures that the job is still pending before allowing the update.
@@ -181,8 +213,11 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
         if job.points_amount != old_points_amount:
             adjust_reserved_points(job, old_points_amount)
 
-        # TODO:
-        # Notify customer
+        # Notify customer of job update
+        # -- BACKGROUND TASK
+        transaction.on_commit(
+            lambda: create_job_updated_notification(user=self.request.user, job=job)
+        )
 
         return response
 
@@ -199,8 +234,20 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
 
         release_reserved_points(job, transaction_type=TransactionType.UNLOCK)
 
-        # TODO:
-        # Notify customer and providers if any
+        # Notify the customer and all providers who made offers.
+        # -- BACKGROUND TASK
+        users = [job.customer.user]
+        # extend() adds individual elements from an iterable (in this case, the providers' users) to the end of the list (users).
+        users.extend(
+            offer.provider.user
+            for offer in job.job_offers.select_related("provider__user").all()
+        )
+        transaction.on_commit(
+            lambda: create_job_cancelled_notification(
+                users=users,
+                job=job,
+            )
+        )
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -286,6 +333,7 @@ class JobRequestImageDeleteView(JobRequestMixin, APIView):
 
 class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
     serializer_class = JobRequestOfferSerializer
+    throttle_scope = "job_offers"
 
     # get_permissions returns the appropriate permissions based on the request method and whether a specific job ID is provided in the URL.
     # For GET requests without a job ID, only verified providers can access the endpoint.
@@ -328,7 +376,7 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
     def get_throttles(self):
         if self.request.method == "GET":
             return [UserRateThrottle()]
-        return [ScopedRateThrottle(scope="job_offers")]
+        return [ScopedRateThrottle()]
 
     def create(self, request, *args, **kwargs):
         # Provider's get request doesn't have a job_id
@@ -361,8 +409,11 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
             provider=request.user.provider_profile,
         )
 
-        # TODO:
+        # -- BACKGROUND TASK
         # Notify the job owner, of a new offer
+        transaction.on_commit(
+            lambda: create_job_new_offer_notification(user=job.customer.user, job=job)
+        )
 
         return Response(
             serializer.data,
@@ -386,41 +437,93 @@ class JobOfferAcceptView(JobRequestMixin, ProviderMixin, APIView):
     )
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
-        offer = get_object_or_404(
-            JobRequestOffer.objects.select_related(
-                "job",
-                "job__customer",
-                "job__customer__user",
-            ),
+        # Get the job ID associated with this offer.
+        initial_offer = get_object_or_404(
+            JobRequestOffer.objects.only("pk", "job_id"),
             pk=self.kwargs["pk"],
         )
-        job = offer.job
 
+        # Lock the job row.
+        # Other acceptance requests for this same job must wait until this transaction finishes.
+        job = get_object_or_404(
+            JobRequest.objects.select_for_update(),
+            pk=initial_offer.job_id,
+        )
+
+        # Re-fetch and lock the offer after acquiring the job lock.
+        offer = get_object_or_404(
+            JobRequestOffer.objects.select_for_update().select_related(
+                "provider__user",
+            ),
+            pk=self.kwargs["pk"],
+            job=job,
+        )
+
+        # Perform these checks AFTER acquiring the locks.
         self.check_job_owner(job)
-        self.ensure_job_is_open(job, "Offers can only be managed while the job is open")
 
-        self.ensure_offer_is_pending(offer, "This offer has already been processed.")
+        self.ensure_job_is_open(
+            job,
+            "Offers can only be managed while the job is open",
+        )
 
+        self.ensure_offer_is_pending(
+            offer,
+            "This offer has already been processed.",
+        )
+
+        # Accept this offer.
         offer.status = JobOfferStatus.ACCEPTED
         offer.save(update_fields=["status"])
 
+        # Reject all other pending offers for this job.
         JobRequestOffer.objects.filter(
             job=job,
             status=JobOfferStatus.PENDING,
         ).exclude(
-            pk=offer.pk
-        ).update(status=JobOfferStatus.REJECTED)
+            pk=offer.pk,
+        ).update(
+            status=JobOfferStatus.REJECTED,
+        )
 
+        # Mark the job as in progress.
         job.status = JobRequestStatus.IN_PROGRESS
         job.save(update_fields=["status"])
 
-        # TODO:
-        # Notify the accepted provider.
+        # -- BACKGROUND TASK
+        # Notify the accepted provider after commit.
+        transaction.on_commit(
+            lambda: create_job_offer_accepted_notification(
+                user=offer.provider.user,
+                job=job,
+            )
+        )
 
-        # TODO:
-        # Notify all rejected providers if any.
+        # -- BACKGROUND TASK
+        # Notify rejected providers.
+        rejected_offers = (
+            JobRequestOffer.objects.filter(
+                job=job,
+                status=JobOfferStatus.REJECTED,
+            )
+            .exclude(pk=offer.pk)
+            .select_related("provider__user")
+        )
 
-        return Response({"detail": "Offer accepted."}, status=status.HTTP_200_OK)
+        for rejected_offer in rejected_offers:
+            transaction.on_commit(
+                lambda user=rejected_offer.provider.user: (
+                    create_job_offer_rejected_notification(
+                        user=user,
+                        job=job,
+                    )
+                )
+            )
+
+        return Response(
+            {"detail": "Offer accepted."},
+            status=status.HTTP_200_OK,
+        )
 
 
 class JobOfferRejectView(JobRequestMixin, ProviderMixin, APIView):
@@ -458,8 +561,14 @@ class JobOfferRejectView(JobRequestMixin, ProviderMixin, APIView):
         offer.status = JobOfferStatus.REJECTED
         offer.save(update_fields=["status"])
 
-        # TODO:
+        # -- BACKGROUND TASK
         # Notify rejected provider
+        transaction.on_commit(
+            lambda: create_job_offer_rejected_notification(
+                user=offer.provider.user,
+                job=job,
+            )
+        )
 
         return Response(
             {"detail": "Offer rejected."},
@@ -605,8 +714,14 @@ class JobRequestCompletionView(JobRequestMixin, ProviderMixin, APIView):
         job.status = JobRequestStatus.AWAITING_CONFIRMATION
         job.save(update_fields=["status"])
 
-        # TODO
+        # -- BACKGROUND TASK
         # Notify job owner of a completion request
+        transaction.on_commit(
+            lambda: create_job_completion_request_notification(
+                user=job.customer.user,
+                job=job,
+            )
+        )
 
         return Response(
             {"detail": ("Completion request sent successfully.")},
@@ -690,8 +805,14 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
 
         pay_provider(job, offer)
 
-        # TODO:
+        # -- BACKGROUND TASK
         # Notify provider of completed job
+        transaction.on_commit(
+            lambda: create_job_completion_approved_notification(
+                user=provider.user,
+                job=job,
+            )
+        )
 
         return Response(
             {
@@ -722,6 +843,12 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
             ),
             pk=self.kwargs["pk"],
         )
+        # Get the provider who accepted the job.
+        accepted_offer = get_object_or_404(
+            JobRequestOffer.objects.select_related("provider__user"),
+            job=job,
+            status=JobOfferStatus.ACCEPTED,
+        )
         self.check_job_owner(job)
 
         self.ensure_job_is_awaiting_confirmation(
@@ -740,14 +867,33 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
 
         serializer.save(job=job)
 
+        # Mark the job as disputed.
         job.status = JobRequestStatus.DISPUTED
         job.save(update_fields=["status"])
 
-        # TODO:
-        # Notify administrators that a dispute
-        # has been opened.
-        #
-        # Notify provider of the dispute
+        # -- BACKGROUND TASK
+        # Notify the provider after the transaction commits.
+        transaction.on_commit(
+            lambda: create_dispute_opened_notification(
+                user=accepted_offer.provider.user,
+                job=job,
+            )
+        )
+
+        # -- BACKGROUND TASK
+        # Notify administrators after the transaction commits.
+        admin_users = User.objects.filter(
+            role=UserRole.ADMIN,
+            is_active=True,
+        )
+
+        for admin in admin_users:
+            transaction.on_commit(
+                lambda user=admin: create_dispute_opened_admin_notification(
+                    user=user,
+                    job=job,
+                )
+            )
 
         return Response(
             serializer.data,
@@ -802,35 +948,71 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
         serializer.is_valid(raise_exception=True)
 
         dispute = serializer.save(resolved_by=request.user)
-
         job = dispute.job
+
+        # Get the provider who accepted the job.
+        offer = JobRequestOffer.objects.select_related(
+            "provider",
+            "provider__user",
+        ).get(
+            job=job,
+            status=JobOfferStatus.ACCEPTED,
+        )
+
+        customer_user = job.customer.user
+        provider_user = offer.provider.user
 
         if dispute.decision == JobDisputeDecision.REFUND_POINTS:
             job.status = JobRequestStatus.CANCELLED
 
-            release_reserved_points(job, transaction_type=TransactionType.REFUND)
+            release_reserved_points(
+                job,
+                transaction_type=TransactionType.REFUND,
+            )
 
-            # TODO:
-            # Notify customer and provider.
+            # -- BACKGROUND TASK
+            # Notify the customer after the transaction commits.
+            transaction.on_commit(
+                lambda: create_dispute_refunded_customer_notification(
+                    user=customer_user,
+                    job=job,
+                )
+            )
+
+            # -- BACKGROUND TASK
+            # Notify the provider after the transaction commits.
+            transaction.on_commit(
+                lambda: create_dispute_cancelled_provider_notification(
+                    user=provider_user,
+                    job=job,
+                )
+            )
 
         elif dispute.decision == JobDisputeDecision.RELEASE_POINTS:
             job.status = JobRequestStatus.COMPLETED
-
-            offer = JobRequestOffer.objects.select_related(
-                "provider",
-                "provider__user",
-            ).get(
-                job=job,
-                status=JobOfferStatus.ACCEPTED,
-            )
 
             pay_provider(job, offer)
 
             offer.provider.completed_jobs = F("completed_jobs") + 1
             offer.provider.save(update_fields=["completed_jobs"])
 
-            # TODO:
-            # Notify customer and provider.
+            # -- BACKGROUND TASK
+            # Notify the customer after the transaction commits.
+            transaction.on_commit(
+                lambda: create_dispute_released_customer_notification(
+                    user=customer_user,
+                    job=job,
+                )
+            )
+
+            # -- BACKGROUND TASK
+            # Notify the provider after the transaction commits.
+            transaction.on_commit(
+                lambda: create_dispute_released_provider_notification(
+                    user=provider_user,
+                    job=job,
+                )
+            )
 
         job.save(update_fields=["status"])
 

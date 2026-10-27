@@ -1,4 +1,6 @@
-from django.urls import path
+from django.urls import path, include
+
+from rest_framework.routers import DefaultRouter
 
 from apps.konnett_points.views import (
     UserWalletView,
@@ -9,6 +11,15 @@ from apps.konnett_points.views import (
     WithdrawalRequestRetrieveView,
     WithdrawalApproveView,
     WithdrawalRejectView,
+    ApprovedWithdrawalRequestViewset,
+    ApprovedWithdrawalRequestPaidView,
+)
+
+router = DefaultRouter()
+router.register(
+    "",
+    ApprovedWithdrawalRequestViewset,
+    basename="approved-withdrawals",
 )
 
 urlpatterns = [
@@ -22,7 +33,7 @@ urlpatterns = [
     path("purchase/", PointPurchaseView.as_view(), name="purchase-konnett-points"),
     # Point Purchase Verification
     path(
-        "verify/",
+        "purchase/verify/",
         PointPurchaseVerificationView.as_view(),
         name="verify-purchase-konnett-points",
     ),
@@ -46,5 +57,11 @@ urlpatterns = [
         "withdrawals/<uuid:pk>/reject/",
         WithdrawalRejectView.as_view(),
         name="withdrawal-reject",
+    ),
+    path("approved_withdrawals/", include(router.urls)),
+    path(
+        "approved_withdrawals/<uuid:pk>/paid/",
+        ApprovedWithdrawalRequestPaidView.as_view(),
+        name="approved-withdrawal-paid",
     ),
 ]
