@@ -1,4 +1,7 @@
-from django.db.models import Q
+from django.conf import settings
+from django.db import transaction
+from django.shortcuts import get_object_or_404
+
 from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
@@ -17,6 +20,7 @@ from apps.providers.serializers import (
     ProviderProfileSerializer,
     ProviderVerificationSerializer,
 )
+from apps.providers.notifications import send_verification_email
 
 # Create your views here.
 
@@ -31,7 +35,10 @@ class ProviderProfileView(generics.RetrieveUpdateAPIView):
         return ProviderProfile.objects.select_related("user", "address")
 
     def get_object(self):
-        return self.get_queryset().get(user=self.request.user)
+        return get_object_or_404(
+            self.get_queryset(),
+            user=self.request.user,
+        )
 
     def retrieve(self, request, *args, **kwargs):
         user_id = request.user.id
@@ -66,7 +73,10 @@ class ProviderVerificationView(generics.RetrieveUpdateAPIView):
         )
 
     def get_object(self):
-        return self.get_queryset().get(provider__user=self.request.user)
+        return get_object_or_404(
+            self.get_queryset(),
+            provider__user=self.request.user,
+        )
 
     def perform_update(self, serializer):
         verification = serializer.instance
@@ -101,8 +111,10 @@ class AdminPendingProviderVerificationsListView(generics.ListAPIView):
 )
 @api_view(["PATCH"])
 @permission_classes([IsAdminUser])
+@transaction.atomic
 def update_provider_verification_status(request, provider_id):
     verification_status = request.data.get("verification_status")
+    admin_comment = request.data.get("admin_comment")
 
     if verification_status not in ProviderVerificationStatus.values:
         return Response(
@@ -129,13 +141,36 @@ def update_provider_verification_status(request, provider_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    if verification_status == ProviderVerificationStatus.REJECTED:
+        if not admin_comment:
+            return Response(
+                {"error": "Admin comment is required when rejecting a verification."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        verification.admin_comment = admin_comment
+
+        # -- BACKGROUND TASK --
+        # Send rejection email to provider with admin_comment
+        transaction.on_commit(
+            lambda: send_verification_email(
+                user=verification.provider.user,
+                status=ProviderVerificationStatus.REJECTED,
+                admin_comment=admin_comment,
+            )
+        )
+
     previous_status = verification.status
     verification.status = verification_status
-    verification.save(update_fields=["status"])
+    verification.save(update_fields=["status", "admin_comment"])
 
-    # TODO:
     # -- BACKGROUND TASK --
     # Send verification successful email
+    transaction.on_commit(
+        lambda: send_verification_email(
+            user=verification.provider.user, status=ProviderVerificationStatus.VERIFIED
+        )
+    )
 
     return Response(
         {

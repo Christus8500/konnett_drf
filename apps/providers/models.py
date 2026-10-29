@@ -77,6 +77,7 @@ class ProviderVerification(UUIDModel):
         choices=ProviderVerificationStatus.choices,
         default=ProviderVerificationStatus.PENDING,
     )
+    admin_comment = models.TextField(blank=True, null=True)
     submitted_at = models.DateTimeField(blank=True, null=True)
 
     # Override the save method to set the submitted_at field when either document is uploaded for the first time.

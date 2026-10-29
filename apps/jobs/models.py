@@ -96,7 +96,7 @@ class JobCompletionImage(UUIDModel):
 
 
 # TODO: 
-# Let the provider know ofor see the admin fee,
+# Let the provider know of or see the admin fee,
 # 10% of the job points
 class JobRequestOffer(UUIDModel, TimeStampedModel):
     job = models.ForeignKey(

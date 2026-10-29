@@ -10,7 +10,6 @@ from apps.core.serializers import AddressSerializer
 from apps.core.choices import ProviderVerificationStatus
 
 
-
 # Serializer for the ProviderProfile model, handling serialization and deserialization of provider profile data.
 class ProviderProfileSerializer(serializers.ModelSerializer):
     user_id = serializers.UUIDField(source="user.id", required=False, read_only=True)
@@ -99,12 +98,17 @@ class ProviderProfileSerializer(serializers.ModelSerializer):
 
     # Validation method to ensure that the business name is unique across all provider profiles, excluding the current instance being updated.
     def validate_business_name(self, value):
-        if (
-            ProviderProfile.objects.filter(business_name=value)
-            .exclude(pk=self.instance.pk)
-            .exists()
-        ):
+        if not value:
+            return value
+
+        queryset = ProviderProfile.objects.filter(business_name__iexact=value)
+
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        if queryset.exists():
             raise serializers.ValidationError("Business name already exists.")
+
         return value
 
     # Overriding the serializer update method
