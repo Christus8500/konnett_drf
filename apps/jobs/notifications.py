@@ -1,8 +1,6 @@
-# from django.utils.html import format_html, format_html_join
-
-# from apps.core.utils import send_email
-
 from apps.mails.services import create_mailbox_message
+
+from apps.core.choices import UserRole
 
 
 # job_created_notification: Creates a notification for a user when they create a job.
@@ -59,6 +57,21 @@ def create_job_cancelled_notification(users, job):
             body=(
                 f"Hi {user.first_name},\n\n"
                 f"The job '{job.title}' has been cancelled.\n\n"
+                "A job is cancelled when the owner cancels or the job reaches its deadline.\n\n"
+                "Thanks."
+            ),
+        )
+
+
+def create_job_cancelled_provider_partial_pay_notification(users, job):
+    for user in users:
+        create_mailbox_message(
+            user=user,
+            subject=f"{job.title} Job Cancelled",
+            body=(
+                f"Hi {user.first_name},\n\n"
+                f"The job '{job.title}' has been cancelled.\n\n"
+                "Since the job was in-progress, a 20% of the job points was paid to the provider.\n\n"
                 "Thanks."
             ),
         )
@@ -131,6 +144,28 @@ def create_job_completion_approved_notification(user, job):
             "Thanks."
         ),
     )
+
+
+def create_job_completed_by_deadline_notification(users, job):
+    provider_note = (
+        f"Please note that 10% of the job points will be deducted as the administrative fee.\n\n"
+        f"Administrative fee is {job.admin_fee_points}.\n\n"
+        f"Your credited points is {job.provider_earning_points}.\n\n"
+    )
+    for user in users:
+        create_mailbox_message(
+            user=user,
+            subject=f"{job.title} Completed",
+            body=(
+                f"Hi {user.first_name},\n\n"
+                f"The job '{job.title}' has been marked as complete.\n\n"
+                f"The provider has been paid in full.\n\n"
+                "This is because, the job deadline has reached and the provider is done with the job, so the job was awaiting confirmation when the deadline reached.\n\n"
+                f"{provider_note if user.role == UserRole.PROVIDER else ''}"
+                "Please check your account for more details.\n\n"
+                "Thanks."
+            ),
+        )
 
 
 def create_dispute_opened_notification(user, job):
@@ -216,62 +251,3 @@ def create_dispute_released_provider_notification(user, job):
             "Thanks."
         ),
     )
-
-
-# def send_job_created_email(user, job):
-#     job_details = [
-#         ("Job ID", job.id),
-#         ("Job Category", job.category),
-#         ("Job Title", job.title),
-#         ("Job Scheduled Points", job.points_amount),
-#         ("Job Deadline", job.deadline),
-#         ("Job Primary Location", job.primary_location),
-#     ]
-
-#     if job.secondary_location:
-#         job_details.append(("Job Secondary Location", job.secondary_location))
-
-#     # Plain-text email
-#     text_details = "\n".join(f"{label}: {value}" for label, value in job_details)
-
-#     text_content = (
-#         f"Hi {user.first_name},\n\n"
-#         "You just created a job. Details are below:\n\n"
-#         f"{text_details}\n\n"
-#         "Hope your job gets done to your satisfaction.\n\n"
-#         "Thanks."
-#     )
-
-#     # HTML email with safely escaped dynamic values
-#     html_items = format_html_join(
-#         "",
-#         "<li><strong>{}:</strong> {}</li>",
-#         job_details,
-#     )
-
-#     html_content = format_html(
-#         """
-#         <h2>New Job Created!</h2>
-
-#         <p>Hello {},</p>
-
-#         <p>You just created a job. Details are below:</p>
-
-#         <ul>
-#             {}
-#         </ul>
-
-#         <p>Hope your job gets done to your satisfaction.</p>
-
-#         <p>Thanks.</p>
-#         """,
-#         user.first_name,
-#         html_items,
-#     )
-
-#     return send_email(
-#         subject="New Job Created",
-#         to=user.email,
-#         text_content=text_content,
-#         html_content=html_content,
-#     )

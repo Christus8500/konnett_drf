@@ -175,9 +175,7 @@ def reserve_job_points(job):
 
     available_points -> locked_points
     """
-    wallet = PointWallet.objects.select_for_update().get(
-        user=job.customer.user
-    )
+    wallet = PointWallet.objects.select_for_update().get(user=job.customer.user)
     points_to_lock = job.points_amount
 
     lock_points(wallet, points_to_lock)
@@ -201,9 +199,7 @@ def adjust_reserved_points(job, old_points_amount):
     If the new amount is lower:
         locked_points -> available_points
     """
-    wallet = PointWallet.objects.select_for_update().get(
-        user=job.customer.user
-    )
+    wallet = PointWallet.objects.select_for_update().get(user=job.customer.user)
 
     difference = job.points_amount - old_points_amount
 
@@ -311,6 +307,118 @@ def pay_provider(job, accepted_offer):
     )
 
     return customer_transaction, provider_transaction
+
+
+@transaction.atomic
+def pay_provider_partial(job, accepted_offer, percentage):
+    """
+    Pay the provider a percentage of the original job amount
+    when an IN_PROGRESS job expires.
+
+    Example:
+        Job amount: 10,000
+        Percentage: 30%
+
+        Provider gross allocation: 3,000
+        Admin fee (10%):             300
+        Provider receives:         2,700
+        Customer refund:           7,000
+
+    The customer's entire original locked amount is removed
+    from locked_points. The unused portion is returned to
+    available_points.
+    """
+
+    if percentage <= 0 or percentage > 100:
+        raise ValidationError({"percentage": "Percentage must be between 1 and 100."})
+
+    customer_wallet = PointWallet.objects.select_for_update().get(
+        user=job.customer.user
+    )
+
+    provider_wallet = PointWallet.objects.select_for_update().get(
+        user=accepted_offer.provider.user
+    )
+
+    job_points = job.points_amount
+
+    if customer_wallet.locked_points < job_points:
+        raise ValidationError({"locked_points": "Insufficient locked points."})
+
+    # Percentage of the original job amount allocated
+    # to the provider before the admin fee.
+    provider_gross_points = int(job_points * Decimal(percentage) / Decimal(100))
+
+    # Admin fee is taken from the provider's allocated amount.
+    admin_fee_points = int(provider_gross_points * ADMIN_FEE_RATE)
+
+    # Provider's actual earnings.
+    provider_points = provider_gross_points - admin_fee_points
+
+    # Everything not allocated to the provider is refunded
+    # to the customer.
+    customer_refund_points = job_points - provider_gross_points
+
+    # Remove the ENTIRE original job amount from the
+    # customer's locked balance.
+    customer_wallet.locked_points -= job_points
+
+    # Return unused points to customer's available balance.
+    customer_wallet.available_points += customer_refund_points
+
+    # Pay provider their actual earnings.
+    provider_wallet.available_points += provider_points
+
+    customer_wallet.save(
+        update_fields=[
+            "locked_points",
+            "available_points",
+        ]
+    )
+
+    provider_wallet.save(update_fields=["available_points"])
+
+    # Record provider's actual earnings.
+    provider_transaction = create_point_transaction(
+        wallet=provider_wallet,
+        points=provider_points,
+        transaction_type=TransactionType.EARNED,
+        job=job,
+    )
+
+    # Record customer's refund.
+    customer_refund_transaction = create_point_transaction(
+        wallet=customer_wallet,
+        points=customer_refund_points,
+        transaction_type=TransactionType.REFUND,
+        job=job,
+    )
+
+    # Record the portion of the customer's locked points
+    # used for the provider allocation.
+    customer_payment_transaction = create_point_transaction(
+        wallet=customer_wallet,
+        points=provider_gross_points,
+        transaction_type=TransactionType.PROVIDER_PAY,
+        job=job,
+    )
+
+    # Store the actual amounts on the job.
+    job.admin_fee_points = admin_fee_points
+    job.provider_earning_points = provider_points
+
+    job.save(
+        update_fields=[
+            "admin_fee_points",
+            "provider_earning_points",
+        ]
+    )
+
+    return (
+        customer_payment_transaction,
+        customer_refund_transaction,
+        provider_transaction,
+    )
 
 
 # ^ ################### WITHDRAWAL HELPERS ####################
