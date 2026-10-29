@@ -101,6 +101,7 @@ class AdminPendingProviderVerificationsListView(generics.ListAPIView):
 
 
 # API view for updating the verification status of a provider. This view is restricted to admin users only.
+
 @extend_schema(
     request=OpenApiTypes.OBJECT,
     responses={
@@ -116,21 +117,40 @@ def update_provider_verification_status(request, provider_id):
     verification_status = request.data.get("verification_status")
     admin_comment = request.data.get("admin_comment")
 
-    if verification_status not in ProviderVerificationStatus.values:
+    allowed_statuses = {
+        ProviderVerificationStatus.VERIFIED,
+        ProviderVerificationStatus.REJECTED,
+    }
+
+    if verification_status not in allowed_statuses:
         return Response(
             {"error": "Invalid verification status."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
     try:
-        verification = ProviderVerification.objects.select_related("provider").get(
-            provider_id=provider_id
-        )
+        verification = ProviderVerification.objects.select_related(
+            "provider__user"
+        ).get(provider_id=provider_id)
     except ProviderVerification.DoesNotExist:
         return Response(
             {"error": "Provider verification not found."},
             status=status.HTTP_404_NOT_FOUND,
         )
+
+    if verification_status == ProviderVerificationStatus.REJECTED:
+        if not admin_comment or not admin_comment.strip():
+            return Response(
+                {
+                    "error": (
+                        "Admin comment is required when rejecting "
+                        "a verification."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        admin_comment = admin_comment.strip()
 
     if (
         verification.provider.is_verified
@@ -141,40 +161,40 @@ def update_provider_verification_status(request, provider_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    if verification_status == ProviderVerificationStatus.REJECTED:
-        if not admin_comment:
-            return Response(
-                {"error": "Admin comment is required when rejecting a verification."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        verification.admin_comment = admin_comment
-
-        # -- BACKGROUND TASK --
-        # Send rejection email to provider with admin_comment
-        transaction.on_commit(
-            lambda: send_verification_email(
-                user=verification.provider.user,
-                status=ProviderVerificationStatus.REJECTED,
-                admin_comment=admin_comment,
-            )
-        )
-
     previous_status = verification.status
+
     verification.status = verification_status
+
+    if verification_status == ProviderVerificationStatus.REJECTED:
+        verification.admin_comment = admin_comment
+        verification.provider.is_verified = False
+    else:
+        verification.admin_comment = ""
+        verification.provider.is_verified = True
+
     verification.save(update_fields=["status", "admin_comment"])
 
+    verification.provider.save(update_fields=["is_verified"])
+
+    email_status = verification_status
+    email_comment = admin_comment
+
     # -- BACKGROUND TASK --
-    # Send verification successful email
+    # Send email based on the verification status.
     transaction.on_commit(
         lambda: send_verification_email(
-            user=verification.provider.user, status=ProviderVerificationStatus.VERIFIED
+            user=verification.provider.user,
+            status=email_status,
+            admin_comment=email_comment,
         )
     )
 
     return Response(
         {
-            "message": f"Verification status updated from {previous_status} to {verification.status}.",
+            "message": (
+                f"Verification status updated from {previous_status} "
+                f"to {verification.status}."
+            ),
             "verification_status": verification.status,
         },
         status=status.HTTP_200_OK,
