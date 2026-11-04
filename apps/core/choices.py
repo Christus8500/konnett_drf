@@ -1,7 +1,7 @@
 from django.db import models
 
 
-# Choices for various fields in the application
+# Choices for various roles in the application
 class UserRole(models.TextChoices):
     ADMIN = "konnett001", "Administrator"
     CUSTOMER = "customer", "Customer"
@@ -66,3 +66,11 @@ class WithdrawalStatus(models.TextChoices):
     APPROVED = "approved", "Approved"
     REJECTED = "rejected", "Rejected"
     PAID = "paid", "Paid"
+
+
+# Choices of EmailOutbox status
+class EmailOutboxStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    PROCESSING = "processing", "Processing"
+    SENT = "sent", "Sent"
+

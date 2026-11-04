@@ -20,7 +20,7 @@ from apps.providers.serializers import (
     ProviderProfileSerializer,
     ProviderVerificationSerializer,
 )
-from apps.providers.notifications import send_verification_email
+from apps.providers.notifications import send_provider_verification_email
 
 # Create your views here.
 
@@ -182,7 +182,7 @@ def update_provider_verification_status(request, provider_id):
     # -- BACKGROUND TASK --
     # Send email based on the verification status.
     transaction.on_commit(
-        lambda: send_verification_email(
+        lambda: send_provider_verification_email(
             user=verification.provider.user,
             status=email_status,
             admin_comment=email_comment,

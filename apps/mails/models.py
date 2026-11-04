@@ -1,7 +1,9 @@
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
 
 from apps.core.models import UUIDModel, TimeStampedModel
+from apps.core.choices import EmailOutboxStatus
 
 # Create your models here.
 
@@ -25,26 +27,31 @@ class MailboxMessage(UUIDModel, TimeStampedModel):
         return f"{self.subject} - {self.user}"
 
 
-class EmailOutbox(models.Model):
+class EmailOutbox(UUIDModel, TimeStampedModel):
     idempotency_key = models.CharField(
         max_length=255,
         unique=True,
     )
     recipient = models.EmailField()
-    purchase = models.ForeignKey(
-        "konnett_points.PointPurchase",
-        on_delete=models.PROTECT,
-    )
     email_type = models.CharField(max_length=100)
+    payload =  models.JSONField(default=dict, blank=True)
     status = models.CharField(
         max_length=20,
-        default="pending",
+        choices=EmailOutboxStatus.choices,
+        default=EmailOutboxStatus.PENDING,
     )
     attempts = models.PositiveIntegerField(default=0)
-    created_at = models.DateTimeField(auto_now_add=True)
+    next_attempt_at = models.DateTimeField(default=timezone.now)
+    processing_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)
+
+    # `processing` helps prevent two workers from intentionally claiming the same record. 
+    # `next_attempt_at` controls when a failed email can be retried. 
+    # `processing_at` allows the periodic task to recover a record if a worker crashes.
 
     class Meta:
         indexes = [
+            models.Index(fields=["status", "next_attempt_at"]),
             models.Index(fields=["status", "created_at"]),
         ]

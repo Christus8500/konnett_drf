@@ -21,9 +21,9 @@ from apps.accounts.serializers import (
     UserSerializer,
 )
 from apps.accounts.models import User
-from apps.accounts.utils import send_verification_email
 
-from apps.mails.services import create_mailbox_message
+from apps.mails.services import create_mailbox_message, queue_email
+from apps.mails.tasks import process_email_outbox
 
 
 # Create your views here.
@@ -67,8 +67,7 @@ class RegisterView(generics.CreateAPIView):
         user = serializer.save()
 
         refresh = RefreshToken.for_user(user)
-
-        # -- BACKGROUND TASK
+        
         transaction.on_commit(
             lambda: create_mailbox_message(
                 user=user,
@@ -77,9 +76,19 @@ class RegisterView(generics.CreateAPIView):
             )
         )
 
-        # Send verification email after the transaction is committed i.e., after the user is successfully created in the database. This ensures that the email is only sent if the user creation is successful.
+        # QUeue verification email after the transaction is committed 
         # -- BACKGROUND TASK
-        transaction.on_commit(lambda: send_verification_email(user))
+        email, _ = queue_email(
+            idempotency_key=f"account-verification:{user.pk}",
+            recipient=user.email,
+            email_type="account_verification",
+            payload={"user_id" : user.pk},
+        )
+
+        transaction.on_commit(
+            lambda email_id=email.pk:
+            process_email_outbox.delay(email_id)
+        )
 
         return Response(
             {

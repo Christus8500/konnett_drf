@@ -4,7 +4,7 @@ from apps.core.utils import send_email
 from apps.core.choices import ProviderVerificationStatus
 
 
-def send_verification_email(user, status, admin_comment=None):
+def send_provider_verification_email(user, status, admin_comment=None):
     first_name = user.first_name or "there"
 
     if status == ProviderVerificationStatus.VERIFIED:

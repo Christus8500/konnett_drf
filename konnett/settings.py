@@ -16,8 +16,9 @@ from datetime import timedelta
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-from dotenv import load_dotenv  # type: ignore
+from dotenv import load_dotenv
 import os
+from celery.schedules import crontab
 
 load_dotenv()
 
@@ -44,6 +45,8 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # Celery Beat
+    "django_celery_beat",
     # filter
     "django_filters",
     # DRF
@@ -114,43 +117,60 @@ DATABASES = {
 }
 
 
-# Caching
+# --- Caching ---
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": "redis://127.0.0.1:6380/1",
+        "LOCATION": os.environ.get("REDIS_CACHE_LOCATION"),
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
         },
     }
 }
+SMALL_CACHE_TIMEOUT = 60 * 15
+MEDIUM_CACHE_TIMEOUT = 60 * 60
+BIG_CACHE_TIMEOUT = 60 * 60 * 24
 
-SMALL_CACHE_TIMEOUT = 60*15
-MEDIUM_CACHE_TIMEOUT = 60*60
-BIG_CACHE_TIMEOUT = 60*60*24
+
+# --- Celery Configuration ---
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND")
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = "UTC"
+# Optional but recommended
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 min hard limit per task
+
+CELERY_BEAT_SCHEDULE = {
+    "check-pending-emails-every-minute": {
+        "task": "konnett_points.tasks.process_pending_emails",
+        "schedule": crontab(minute="*"),
+    },
+    # "expire-overdue-jobs-every-minute": {
+    #     "task": "apps.jobs.tasks.expire_overdue_jobs",
+    #     "schedule": crontab(),
+    # },
+}
 
 
+# --- Email Configuration ---
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-
 EMAIL_HOST = os.getenv("EMAIL_HOST")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", 587))
-
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
-
 EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True").lower() == "true"
 EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "False").lower() == "true"
-
 DEFAULT_FROM_EMAIL = os.getenv(
     "DEFAULT_FROM_EMAIL",
     "noreply@yourdomain.com",
 )
-
 DEFAULT_FROM_NAME = os.getenv(
     "DEFAULT_FROM_NAME",
     "Konnett Admin",
 )
-
 EMAIL_REPLY_TO = os.getenv(
     "EMAIL_REPLY_TO",
     DEFAULT_FROM_EMAIL,

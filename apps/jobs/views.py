@@ -68,7 +68,7 @@ from apps.jobs.notifications import (
     create_job_offer_rejected_notification,
     create_job_updated_notification,
     create_job_cancelled_notification,
-)  # , send_job_created_email
+)
 
 from apps.konnett_points.utils import (
     pay_provider,
@@ -191,7 +191,6 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
         reserve_job_points(job)
 
         # Notify customer
-        # -- BACKGROUND TASK
         transaction.on_commit(
             lambda: create_job_created_notification(user=self.request.user, job=job)
         )
@@ -214,7 +213,6 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
             adjust_reserved_points(job, old_points_amount)
 
         # Notify customer of job update
-        # -- BACKGROUND TASK
         transaction.on_commit(
             lambda: create_job_updated_notification(user=self.request.user, job=job)
         )
@@ -235,7 +233,7 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
         release_reserved_points(job, transaction_type=TransactionType.UNLOCK)
 
         # Notify the customer and all providers who made offers.
-        # -- BACKGROUND TASK
+        # -- If you think users might be around 200, consider moving to celery
         users = [job.customer.user]
         # extend() adds individual elements from an iterable (in this case, the providers' users) to the end of the list (users).
         users.extend(
@@ -409,7 +407,6 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
             provider=request.user.provider_profile,
         )
 
-        # -- BACKGROUND TASK
         # Notify the job owner, of a new offer
         transaction.on_commit(
             lambda: create_job_new_offer_notification(user=job.customer.user, job=job)
@@ -490,7 +487,6 @@ class JobOfferAcceptView(JobRequestMixin, ProviderMixin, APIView):
         job.status = JobRequestStatus.IN_PROGRESS
         job.save(update_fields=["status"])
 
-        # -- BACKGROUND TASK
         # Notify the accepted provider after commit.
         transaction.on_commit(
             lambda: create_job_offer_accepted_notification(
@@ -499,7 +495,6 @@ class JobOfferAcceptView(JobRequestMixin, ProviderMixin, APIView):
             )
         )
 
-        # -- BACKGROUND TASK
         # Notify rejected providers.
         rejected_offers = (
             JobRequestOffer.objects.filter(
@@ -561,7 +556,6 @@ class JobOfferRejectView(JobRequestMixin, ProviderMixin, APIView):
         offer.status = JobOfferStatus.REJECTED
         offer.save(update_fields=["status"])
 
-        # -- BACKGROUND TASK
         # Notify rejected provider
         transaction.on_commit(
             lambda: create_job_offer_rejected_notification(
@@ -714,7 +708,6 @@ class JobRequestCompletionView(JobRequestMixin, ProviderMixin, APIView):
         job.status = JobRequestStatus.AWAITING_CONFIRMATION
         job.save(update_fields=["status"])
 
-        # -- BACKGROUND TASK
         # Notify job owner of a completion request
         transaction.on_commit(
             lambda: create_job_completion_request_notification(
@@ -805,7 +798,6 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
 
         pay_provider(job, offer)
 
-        # -- BACKGROUND TASK
         # Notify provider of completed job
         transaction.on_commit(
             lambda: create_job_completion_approved_notification(
@@ -871,7 +863,6 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
         job.status = JobRequestStatus.DISPUTED
         job.save(update_fields=["status"])
 
-        # -- BACKGROUND TASK
         # Notify the provider after the transaction commits.
         transaction.on_commit(
             lambda: create_dispute_opened_notification(
@@ -880,7 +871,6 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
             )
         )
 
-        # -- BACKGROUND TASK
         # Notify administrators after the transaction commits.
         admin_users = User.objects.filter(
             role=UserRole.ADMIN,
@@ -970,7 +960,6 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
                 transaction_type=TransactionType.REFUND,
             )
 
-            # -- BACKGROUND TASK
             # Notify the customer after the transaction commits.
             transaction.on_commit(
                 lambda: create_dispute_refunded_customer_notification(
@@ -979,7 +968,6 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
                 )
             )
 
-            # -- BACKGROUND TASK
             # Notify the provider after the transaction commits.
             transaction.on_commit(
                 lambda: create_dispute_cancelled_provider_notification(
@@ -996,7 +984,6 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
             offer.provider.completed_jobs = F("completed_jobs") + 1
             offer.provider.save(update_fields=["completed_jobs"])
 
-            # -- BACKGROUND TASK
             # Notify the customer after the transaction commits.
             transaction.on_commit(
                 lambda: create_dispute_released_customer_notification(
@@ -1005,7 +992,6 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
                 )
             )
 
-            # -- BACKGROUND TASK
             # Notify the provider after the transaction commits.
             transaction.on_commit(
                 lambda: create_dispute_released_provider_notification(

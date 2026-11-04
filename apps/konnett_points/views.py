@@ -48,17 +48,15 @@ from apps.konnett_points.utils import (
 )
 from apps.konnett_points.filters import PointTransactionFilter, WithdrawalRequestFilter
 from apps.konnett_points.notifications import (
-    create_point_purchase_failed_notification,
     create_point_purchase_initiated_notification,
     create_point_purchase_successful_notification,
-    create_point_purchase_successful_notification,
+    create_point_purchase_failed_notification,
     create_withdrawal_request_received_notification,
-    send_point_purchase_failed_email,
-    send_point_purchase_successful_email,
     send_withdrawal_email,
 )
 
-from apps.mails.models import EmailOutbox
+from apps.mails.services import queue_email
+from apps.mails.tasks import process_email_outbox
 
 # Create your views here.
 
@@ -131,7 +129,6 @@ class PointPurchaseView(generics.CreateAPIView):
         response_serializer = self.get_serializer(purchase)
         headers = self.get_success_headers(response_serializer.data)
 
-        # -- BACKGROUND TASK --
         # Notify user of initiated purchase
         transaction.on_commit(
             lambda: create_point_purchase_initiated_notification(
@@ -145,6 +142,7 @@ class PointPurchaseView(generics.CreateAPIView):
 
 
 # PointPurchaseVerificationView handles the verification of point purchases via a webhook from the payment provider.
+# TODO: When modifying try to check the comments and the job each block is doing
 class PointPurchaseVerificationView(APIView):
     permission_classes = [AllowAny]
     http_method_names = ["post"]
@@ -180,7 +178,8 @@ class PointPurchaseVerificationView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Lock the purchase record for update to prevent race conditions during verification.
+        # Lock the purchase so concurrent webhook requests cannot process
+        # the same purchase at the same time.
         purchase = (
             PointPurchase.objects.select_for_update()
             .select_related("customer__user")
@@ -189,40 +188,45 @@ class PointPurchaseVerificationView(APIView):
         )
 
         # If the purchase record is not found, return a 404 response indicating that the point purchase was not found.
-        if not purchase:
+        if purchase is None:
             return Response(
                 {"detail": "Point purchase not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # If the purchase has already been processed successfully, return a message indicating that.
+        # A successful purchase must never be credited a second time.
         if purchase.status == PaymentStatus.SUCCESSFUL:
             return Response(
                 {"detail": "Purchase has already been processed."},
                 status=status.HTTP_200_OK,
             )
 
-        # If the payment status is "FAILED",
-        # update the purchase status to "FAILED" and return a message indicating that the purchase has been marked as failed.
+        # Handle failed payments.
         if payment_status == PaymentStatus.FAILED:
             update_purchase_status(
                 purchase,
                 PaymentStatus.FAILED,
             )
 
-            # -- BACKGROUND TASK --
-            # Notify user of failed purchase
+            # Queue the email for succesful purchase
+            email, _ = queue_email(
+                idempotency_key=f"point-purchase-failed:{purchase.pk}",
+                recipient=purchase.customer.user.email,
+                email_type="point_purchase_failed",
+                payload={"purchase_pk": purchase.pk},
+            )
+
+            # Both the notification and Celery task are triggered only
+            # after the purchase/outbox transaction commits.
             transaction.on_commit(
                 lambda: create_point_purchase_failed_notification(
-                    user=purchase.customer.user, purchase=purchase
+                    user=purchase.customer.user,
+                    purchase=purchase,
                 )
             )
-            # -- BACKGROUND TASK --
-            # Send failed purchase email
+
             transaction.on_commit(
-                lambda: send_point_purchase_failed_email(
-                    user=purchase.customer.user, purchase=purchase
-                )
+                lambda email_id=email.pk: process_email_outbox.delay(email_id)
             )
 
             return Response(
@@ -230,8 +234,7 @@ class PointPurchaseVerificationView(APIView):
                 status=status.HTTP_200_OK,
             )
 
-        # If the payment status is not PaymentStatus' SUCCESSFUL',
-        # return a 400 response indicating that the payment status is unsupported.
+        # Reject unknown payment statuses.
         if payment_status != PaymentStatus.SUCCESSFUL:
             return Response(
                 {"detail": "Unsupported payment status."},
@@ -256,13 +259,12 @@ class PointPurchaseVerificationView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        # If the payment is successful and the amount is valid,
-        # retrieve the user's PointWallet
+        # Lock the wallet while updating its point balance.
         wallet = PointWallet.objects.select_for_update().get(
             user=purchase.customer.user
         )
 
-        # If the purchase is successful, update the purchase status to "SUCCESSFUL"
+        # Mark the purchase successful.
         update_purchase_status(
             purchase,
             PaymentStatus.SUCCESSFUL,
@@ -281,36 +283,27 @@ class PointPurchaseVerificationView(APIView):
             purchase=purchase,
         )
 
-        # TODO:
-        # Create an email-sending processor that picks up pending EmailOutbox records and tries to send them.
-        # If successful, mark the EmailOutbox record as sent
-        # otherwise, increment the attempts count and retry later.
-        # Use celery to run the email-sending processor in the background, and set up a periodic task to check for pending emails and send them.
-        # Record the email to be sent.
-        EmailOutbox.objects.get_or_create(
+        # Create the email job in the SAME database transaction as
+        # the purchase update and point credit.
+        email, _ = queue_email(
             idempotency_key=f"point-purchase-success:{purchase.pk}",
-            defaults={
-                "recipient": purchase.customer.user.email,
-                "purchase": purchase,
-                "email_type": "point_purchase_successful",
-                "status": "pending",
-            },
+            recipient=purchase.customer.user.email,
+            email_type="point_purchase_successful",
+            payload={"purchase_id": purchase.pk},
         )
 
-        # TODO:
-        # -- BACKGROUND TASK (Later with the email-sending processor)--
-        # Notify user of successful purchase
+        # Create the in-app notification only after the transaction commits.
         transaction.on_commit(
             lambda: create_point_purchase_successful_notification(
-                user=purchase.customer.user, purchase=purchase
+                user=purchase.customer.user,
+                purchase=purchase,
             )
         )
-        # -- BACKGROUND TASK --
-        # Send successful purchase email
+
+        # Ask Celery to process the email only after the transaction commits.
+        # The periodic task is the backup if Celery cannot be queued here.
         transaction.on_commit(
-            lambda: send_point_purchase_successful_email(
-                user=purchase.customer.user, purchase=purchase
-            )
+            lambda email_id=email.pk: process_email_outbox.delay(email_id)
         )
 
         return Response(
@@ -553,7 +546,7 @@ class WithdrawalApproveView(generics.UpdateAPIView):
             lambda: send_withdrawal_email(
                 user=withdrawal.provider.user,
                 withdrawal=withdrawal,
-                status=WithdrawalStatus.APPROVED
+                status=WithdrawalStatus.APPROVED,
             )
         )
 
@@ -634,7 +627,7 @@ class WithdrawalRejectView(generics.UpdateAPIView):
                 user=withdrawal.provider.user,
                 withdrawal=withdrawal,
                 status=WithdrawalStatus.REJECTED,
-                reject_reason=withdrawal.reject_reason or None
+                reject_reason=withdrawal.reject_reason or None,
             )
         )
 
@@ -684,7 +677,7 @@ class ApprovedWithdrawalRequestPaidView(generics.UpdateAPIView):
             lambda: send_withdrawal_email(
                 user=withdrawal.provider.user,
                 withdrawal=withdrawal,
-                status=WithdrawalStatus.PAID
+                status=WithdrawalStatus.PAID,
             )
         )
 

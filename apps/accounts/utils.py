@@ -1,12 +1,13 @@
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
+from django.utils.html import escape
 from django.conf import settings
 
 from apps.core.utils import send_email
 
 
-def send_verification_email(user):
+def send_account_verification_email(user):
     uid = urlsafe_base64_encode(
         force_bytes(user.pk)
     )
@@ -18,13 +19,16 @@ def send_verification_email(user):
         f"verify-email/?uid={uid}&token={token}"
     )
 
+    first_name = escape(user.first_name)
+    safe_url = escape(verification_url)
+
     send_email(
         subject="Verify your Konnett email",
         to=user.email,
         text_content=(
-            f"Hello {user.first_name},\n\n"
+            f"Hello {first_name},\n\n"
             "Please verify your email address by visiting:\n\n"
-            f"{verification_url}\n\n"
+            f"{safe_url}\n\n"
             "If you did not create this account, "
             "you can ignore this email."
         ),
@@ -32,7 +36,7 @@ def send_verification_email(user):
             <h2>Welcome to Konnett!</h2>
 
             <p>
-                Hello {user.first_name},
+                Hello {first_name},
             </p>
 
             <p>
@@ -45,7 +49,7 @@ def send_verification_email(user):
 
             <p>
                 <a
-                    href="{verification_url}"
+                    href="{safe_url}"
                     style="
                         display: inline-block;
                         padding: 12px 20px;
@@ -65,3 +69,4 @@ def send_verification_email(user):
             </p>
         """,
     )
+

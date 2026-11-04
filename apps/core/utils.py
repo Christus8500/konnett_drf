@@ -64,6 +64,7 @@ def delete_cache(key):
 
 
 # -- Email Sending
+# TODO: Consider moving this to mails app
 # email sending function that uses Django's EmailMultiAlternatives to send emails with optional HTML content, attachments, and various email headers.
 def _normalize_emails(value):
     if not value:
@@ -115,3 +116,8 @@ def send_email(
         email.attach(*attachment)
 
     return email.send(fail_silently=False)
+
+
+# TODO:
+# Use try/except to handle send_email errors
+# See 01_Konnett_Django_Email_Setup line -> 167
