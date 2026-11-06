@@ -73,4 +73,5 @@ class EmailOutboxStatus(models.TextChoices):
     PENDING = "pending", "Pending"
     PROCESSING = "processing", "Processing"
     SENT = "sent", "Sent"
+    FAILED = "failed", "Failed"
 

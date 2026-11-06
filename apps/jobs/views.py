@@ -144,6 +144,16 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
 
         return queryset.none()
 
+    def get_object(self):
+        if self.action in ("partial_update", "destroy"):
+            obj = get_object_or_404(
+                self.get_queryset().select_for_update(of=("self",)),
+                pk=self.kwargs["pk"],
+            )
+            self.check_object_permissions(self.request, obj)
+            return obj
+        return super().get_object()
+
     def get_serializer_class(self):
         if self.action in ["create", "partial_update"]:
             return JobRequestWriteSerializer
@@ -737,10 +747,8 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
         job = get_object_or_404(
-            JobRequest.objects.select_for_update().select_related(
-                "customer",
-                "customer__user",
-                "customer__user__point_wallet",
+            JobRequest.objects.select_for_update(of=("self",)).select_related(
+                "customer__user"
             ),
             pk=self.kwargs["pk"],
         )
@@ -753,10 +761,8 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
         serializer = JobConfirmCompletionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        offer = JobRequestOffer.objects.select_related(
-            "provider",
-            "provider__user",
-        ).get(
+        offer = get_object_or_404(
+            JobRequestOffer.objects.select_related("provider__user"),
             job=job,
             status=JobOfferStatus.ACCEPTED,
         )
@@ -794,7 +800,8 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
         )
 
         job.status = JobRequestStatus.COMPLETED
-        job.save(update_fields=["status"])
+        job.completed_at = timezone.now()
+        job.save(update_fields=["status", "completed_at"])
 
         pay_provider(job, offer)
 
@@ -829,22 +836,21 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         job = get_object_or_404(
-            JobRequest.objects.select_for_update().select_related(
-                "customer",
-                "customer__user",
+            JobRequest.objects.select_for_update(of=("self",)).select_related(
+                "customer__user"
             ),
             pk=self.kwargs["pk"],
         )
-        # Get the provider who accepted the job.
+
+        self.check_job_owner(job)
+        self.ensure_job_is_awaiting_confirmation(
+            job, "Only the jobs awaiting confirmation can be disputed."
+        )
+
         accepted_offer = get_object_or_404(
             JobRequestOffer.objects.select_related("provider__user"),
             job=job,
             status=JobOfferStatus.ACCEPTED,
-        )
-        self.check_job_owner(job)
-
-        self.ensure_job_is_awaiting_confirmation(
-            job, "Only the jobs awaiting confirmation can be disputed."
         )
 
         # Check if a dispute already exists for this job.
@@ -919,90 +925,74 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
     throttle_scope = "disputes"
 
     def get_queryset(self):
-        return JobDispute.objects.select_for_update().select_related(
-            "job",
-            "job__customer",
+        return JobDispute.objects.select_for_update(of=("self", "job")).select_related(
+            "job", "job__customer__user"
         )
 
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
         dispute = self.get_object()
-
         self.ensure_dispute_is_unresolved(dispute)
 
-        serializer = self.get_serializer(
-            dispute,
-            data=request.data,
-            partial=True,
-        )
+        job = dispute.job
+        if job.status != JobRequestStatus.DISPUTED:
+            raise ValidationError({"detail": "This job is not in a disputed state."})
+
+        serializer = self.get_serializer(dispute, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
 
-        dispute = serializer.save(resolved_by=request.user)
-        job = dispute.job
+        decision = serializer.validated_data.get("decision")
+        if decision not in (
+            JobDisputeDecision.REFUND_POINTS,
+            JobDisputeDecision.RELEASE_POINTS,
+        ):
+            raise ValidationError({"decision": "A valid decision is required."})
 
-        # Get the provider who accepted the job.
-        offer = JobRequestOffer.objects.select_related(
-            "provider",
-            "provider__user",
-        ).get(
+        offer = get_object_or_404(
+            JobRequestOffer.objects.select_related("provider__user"),
             job=job,
             status=JobOfferStatus.ACCEPTED,
         )
 
+        dispute = serializer.save(resolved_by=request.user)
+
         customer_user = job.customer.user
         provider_user = offer.provider.user
 
-        if dispute.decision == JobDisputeDecision.REFUND_POINTS:
+        if decision == JobDisputeDecision.REFUND_POINTS:
             job.status = JobRequestStatus.CANCELLED
+            release_reserved_points(job, transaction_type=TransactionType.REFUND)
 
-            release_reserved_points(
-                job,
-                transaction_type=TransactionType.REFUND,
-            )
-
-            # Notify the customer after the transaction commits.
             transaction.on_commit(
                 lambda: create_dispute_refunded_customer_notification(
-                    user=customer_user,
-                    job=job,
+                    user=customer_user, job=job
                 )
             )
-
-            # Notify the provider after the transaction commits.
             transaction.on_commit(
                 lambda: create_dispute_cancelled_provider_notification(
-                    user=provider_user,
-                    job=job,
+                    user=provider_user, job=job
                 )
             )
-
-        elif dispute.decision == JobDisputeDecision.RELEASE_POINTS:
+        else:  # RELEASE_POINTS
             job.status = JobRequestStatus.COMPLETED
+            job.completed_at = timezone.now()
 
             pay_provider(job, offer)
 
             offer.provider.completed_jobs = F("completed_jobs") + 1
             offer.provider.save(update_fields=["completed_jobs"])
 
-            # Notify the customer after the transaction commits.
             transaction.on_commit(
                 lambda: create_dispute_released_customer_notification(
-                    user=customer_user,
-                    job=job,
+                    user=customer_user, job=job
                 )
             )
-
-            # Notify the provider after the transaction commits.
             transaction.on_commit(
                 lambda: create_dispute_released_provider_notification(
-                    user=provider_user,
-                    job=job,
+                    user=provider_user, job=job
                 )
             )
 
-        job.save(update_fields=["status"])
+        job.save(update_fields=["status", "completed_at"])
 
-        return Response(
-            serializer.data,
-            status=status.HTTP_200_OK,
-        )
+        return Response(serializer.data, status=status.HTTP_200_OK)

@@ -18,6 +18,10 @@ from apps.konnett_points.utils import (
     release_reserved_points,
 )
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 # TODO:
 # Setup Celery and wire this
@@ -58,50 +62,33 @@ def expire_job(job, in_progress_percentage=JOB_IN_PROGRESS_PROVIDER_PERCENT):
     # Lock the job so another request/worker cannot process
     # the same job at the same time.
     job = (
-        JobRequest.objects.select_for_update()
-        .select_related(
-            "customer",
-            "customer__user",
-        )
+        JobRequest.objects.select_for_update(of=("self",))
+        .select_related("customer__user")
         .get(pk=job.pk)
     )
 
-    # No deadline means there is nothing to expire.
-    if job.deadline is None:
-        return False
-
-    # Deadline has not been reached.
-    if job.deadline > timezone.now():
+    if job.deadline is None or job.deadline > timezone.now():
         return False
 
     # --------------------------------------------------
-    # DISPUTED
-    # --------------------------------------------------
+    # DISPUTED, COMPLETED, CANCELLED
     # Do absolutely nothing.
-    if job.status == JobRequestStatus.DISPUTED:
+    # --------------------------------------------------
+    if job.status in (
+        JobRequestStatus.DISPUTED,
+        JobRequestStatus.COMPLETED,
+        JobRequestStatus.CANCELLED,
+    ):
         return False
 
     # --------------------------------------------------
-    # COMPLETED
-    # --------------------------------------------------
-    if job.status == JobRequestStatus.COMPLETED:
-        return False
-
-    # --------------------------------------------------
-    # CANCELLED
-    # --------------------------------------------------
-    if job.status == JobRequestStatus.CANCELLED:
-        return False
-
-    # --------------------------------------------------
-    # PENDING / OPEN
+    # PENDING / OPEN: cancel and refund 100%
     # --------------------------------------------------
     if job.status in (
         JobRequestStatus.PENDING,
         JobRequestStatus.OPEN,
     ):
         job.status = JobRequestStatus.CANCELLED
-
         job.save(update_fields=["status"])
 
         # Return 100% of the customer's reserved points.
@@ -116,40 +103,47 @@ def expire_job(job, in_progress_percentage=JOB_IN_PROGRESS_PROVIDER_PERCENT):
             offer.provider.user
             for offer in job.job_offers.select_related("provider__user").all()
         )
-        create_job_cancelled_notification(
-            users=users,
-            job=job,
+
+        transaction.on_commit(
+            lambda: create_job_cancelled_notification(users=users, job=job)
         )
 
         return True
 
-    # --------------------------------------------------
-    # Get accepted provider for payment-related states.
-    # --------------------------------------------------
-    if job.status in (
+    
+    if job.status not in (
         JobRequestStatus.IN_PROGRESS,
         JobRequestStatus.AWAITING_CONFIRMATION,
     ):
-        accepted_offer = (
-            JobRequestOffer.objects.select_related(
-                "provider",
-                "provider__user",
-            )
-            .filter(
-                job=job,
-                status=JobOfferStatus.ACCEPTED,
-            )
-            .first()
+        return False
+    
+    # --------------------------------------------------
+    # Get accepted provider for payment-related states.
+    # --------------------------------------------------
+    accepted_offer = (
+        JobRequestOffer.objects.select_related(
+            "provider",
+            "provider__user",
         )
+        .filter(
+            job=job,
+            status=JobOfferStatus.ACCEPTED,
+        )
+        .first()
+    )
 
-        # Safety check:
-        # Never automatically pay a provider if there is
-        # no accepted offer.
-        if accepted_offer is None:
-            return False
+    # Safety check:
+    # Never automatically pay a provider if there is
+    # no accepted offer.
+    if accepted_offer is None:
+        logger.error("Job %s is %s but has no accepted offer.", job.pk, job.status)
+        return False
+
+    provider = accepted_offer.provider
+    users = [job.customer.user, provider.user]
 
     # --------------------------------------------------
-    # IN PROGRESS
+    # IN PROGRESS: partial pay + refund the rest
     # --------------------------------------------------
     if job.status == JobRequestStatus.IN_PROGRESS:
 
@@ -160,44 +154,35 @@ def expire_job(job, in_progress_percentage=JOB_IN_PROGRESS_PROVIDER_PERCENT):
         )
 
         job.status = JobRequestStatus.CANCELLED
-
         job.save(update_fields=["status"])
 
         # Notify the customer and provider of the changes
-        users = [job.customer.user, accepted_offer.provider.user]
-        create_job_cancelled_provider_partial_pay_notification(
-            users=users,
-            job=job,
+        transaction.on_commit(
+            lambda: create_job_cancelled_provider_partial_pay_notification(
+                users=users, job=job
+            )
         )
 
         return True
 
     # --------------------------------------------------
-    # AWAITING CONFIRMATION
+    # AWAITING CONFIRMATION: pay in full
     # --------------------------------------------------
-    if job.status == JobRequestStatus.AWAITING_CONFIRMATION:
+    pay_provider(
+        job,
+        accepted_offer,
+    )
 
-        # Provider receives the normal full-job payment.
-        pay_provider(
-            job,
-            accepted_offer,
-        )
+    job.status = JobRequestStatus.COMPLETED
+    job.completed_at = timezone.now()
+    job.save(update_fields=["status", "completed_at"])
 
-        job.status = JobRequestStatus.COMPLETED
+    provider.completed_jobs = F("completed_jobs") + 1
+    provider.save(update_fields=["completed_jobs"])
 
-        job.save(update_fields=["status", "completed_at"])
+    # Notify the customer and provider of the changes
+    transaction.on_commit(
+        lambda: create_job_completed_by_deadline_notification(users=users, job=job)
+    )
 
-        accepted_offer.provider.completed_jobs = F("completed_jobs") + 1
-        accepted_offer.provider.save(update_fields=["completed_jobs"])
-
-        # Notify the customer and provider of the changes
-        users = [job.customer.user, accepted_offer.provider.user]
-        create_job_completed_by_deadline_notification(
-            users=users,
-            job=job,
-        )
-
-        return True
-
-    # Unknown/unhandled status.
-    return False
+    return True

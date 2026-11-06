@@ -3,6 +3,7 @@ from decimal import Decimal, InvalidOperation
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.shortcuts import get_object_or_404
 
 from django_filters.rest_framework import DjangoFilterBackend
@@ -34,6 +35,7 @@ from apps.konnett_points.serializers import (
     UserPointWalletSerializer,
     PointPurchaseSerializer,
     PointTransactionSerializer,
+    WithdrawalRejectSerializer,
     WithdrawalRequestSerializer,
     ApprovedWithdrawalRequestSerializer,
 )
@@ -53,6 +55,7 @@ from apps.konnett_points.notifications import (
     create_point_purchase_failed_notification,
     create_withdrawal_request_received_notification,
     send_withdrawal_email,
+    queue_withdrawal_email,
 )
 
 from apps.mails.services import queue_email
@@ -142,7 +145,6 @@ class PointPurchaseView(generics.CreateAPIView):
 
 
 # PointPurchaseVerificationView handles the verification of point purchases via a webhook from the payment provider.
-# TODO: When modifying try to check the comments and the job each block is doing
 class PointPurchaseVerificationView(APIView):
     permission_classes = [AllowAny]
     http_method_names = ["post"]
@@ -170,7 +172,16 @@ class PointPurchaseVerificationView(APIView):
         payment_status = data.get("status")
         payment_reference = data.get("txRef")
         payment_amount = data.get("amount")
-        purchased_at = data.get("createdAt")
+
+        try:
+            purchased_at = parse_datetime(str(data.get("createdAt") or ""))
+        except ValueError:
+            purchased_at = None
+
+        if purchased_at is not None and timezone.is_naive(purchased_at):
+            purchased_at = timezone.make_aware(purchased_at)
+
+        purchased_at = purchased_at or timezone.now()
 
         if not payment_reference:
             return Response(
@@ -208,7 +219,7 @@ class PointPurchaseVerificationView(APIView):
                 PaymentStatus.FAILED,
             )
 
-            # Queue the email for succesful purchase
+            # Queue the email for failed purchase
             email, _ = queue_email(
                 idempotency_key=f"point-purchase-failed:{purchase.pk}",
                 recipient=purchase.customer.user.email,
@@ -241,23 +252,37 @@ class PointPurchaseVerificationView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        if (
+            purchase.status == PaymentStatus.FAILED
+            and payment_status == PaymentStatus.FAILED
+        ):
+            return Response(
+                {"detail": "Purchase already marked as failed."},
+                status=status.HTTP_200_OK,
+            )
+
         # If the payment amount is provided,
         # validate it to ensure it is a valid decimal number and matches the expected amount for the purchase.
         # If the validation fails, return a 400 response with an appropriate error message.
-        if payment_amount is not None:
-            try:
-                payment_amount = Decimal(str(payment_amount))
-            except (InvalidOperation, TypeError):
-                return Response(
-                    {"detail": "Invalid payment amount."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+        if payment_amount is None:
+            return Response(
+                {"detail": "Payment amount is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-            if purchase.money_amount != payment_amount:
-                return Response(
-                    {"detail": "Payment amount does not match purchase."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+        try:
+            payment_amount = Decimal(str(payment_amount))
+        except (InvalidOperation, TypeError):
+            return Response(
+                {"detail": "Invalid payment amount."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if purchase.money_amount != payment_amount:
+            return Response(
+                {"detail": "Payment amount does not match purchase."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Lock the wallet while updating its point balance.
         wallet = PointWallet.objects.select_for_update().get(
@@ -383,7 +408,7 @@ class WithdrawalRequestListCreateView(
 
         # -- BACKGROUNF TASK ---
         # Notify the provider
-        transaction.commit(
+        transaction.on_commit(
             lambda: create_withdrawal_request_received_notification(
                 user=request.user, points_to_withdraw=points_to_withdraw
             )
@@ -480,7 +505,7 @@ class WithdrawalApproveView(generics.UpdateAPIView):
     def patch(self, request, *args, **kwargs):
         # Lock the withdrawal request for update to prevent race conditions during approval.
         withdrawal = get_object_or_404(
-            WithdrawalRequest.objects.select_for_update().select_related(
+            WithdrawalRequest.objects.select_for_update(of=("self",)).select_related(
                 "provider__user"
             ),
             pk=kwargs["pk"],
@@ -542,13 +567,7 @@ class WithdrawalApproveView(generics.UpdateAPIView):
 
         # -- BACKGROUND TASK --
         # Send withdrawal approved email
-        transaction.on_commit(
-            lambda: send_withdrawal_email(
-                user=withdrawal.provider.user,
-                withdrawal=withdrawal,
-                status=WithdrawalStatus.APPROVED,
-            )
-        )
+        queue_withdrawal_email(withdrawal, WithdrawalStatus.APPROVED)
 
         return Response(
             self.get_serializer(withdrawal).data,
@@ -565,8 +584,12 @@ class WithdrawalRejectView(generics.UpdateAPIView):
 
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
+        input_serializer = WithdrawalRejectSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        reject_reason = input_serializer.validated_data["reject_reason"]
+
         withdrawal = get_object_or_404(
-            WithdrawalRequest.objects.select_for_update().select_related(
+            WithdrawalRequest.objects.select_for_update(of=("self",)).select_related(
                 "provider__user"
             ),
             pk=kwargs["pk"],
@@ -609,12 +632,14 @@ class WithdrawalRejectView(generics.UpdateAPIView):
         )
 
         withdrawal.status = WithdrawalStatus.REJECTED
+        withdrawal.reject_reason = reject_reason
         withdrawal.processed_by = request.user
         withdrawal.processed_at = timezone.now()
 
         withdrawal.save(
             update_fields=[
                 "status",
+                "reject_reason",
                 "processed_by",
                 "processed_at",
             ]
@@ -622,13 +647,10 @@ class WithdrawalRejectView(generics.UpdateAPIView):
 
         # -- BACKGROUND TASK --
         # Send withdrawal rejected email
-        transaction.on_commit(
-            lambda: send_withdrawal_email(
-                user=withdrawal.provider.user,
-                withdrawal=withdrawal,
-                status=WithdrawalStatus.REJECTED,
-                reject_reason=withdrawal.reject_reason or None,
-            )
+        queue_withdrawal_email(
+            withdrawal,
+            WithdrawalStatus.REJECTED,
+            reject_reason=reject_reason,
         )
 
         return Response(
@@ -653,32 +675,34 @@ class ApprovedWithdrawalRequestPaidView(generics.UpdateAPIView):
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
         approved_withdrawal = get_object_or_404(
-            ApprovedWithdrawalRequest.objects.select_for_update().select_related(
-                "withdrawal"
-            ),
+            ApprovedWithdrawalRequest.objects.select_for_update(
+                of=("self",)
+            ).select_related("withdrawal__provider__user"),
             pk=kwargs["pk"],
         )
 
-        approved_withdrawal.paid = True
-
-        approved_withdrawal.save(
-            update_fields=[
-                "paid",
-            ]
-        )
+        if approved_withdrawal.paid:
+            return Response(
+                {"detail": "This withdrawal has already been marked as paid."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         withdrawal = approved_withdrawal.withdrawal
+
+        if withdrawal.status != WithdrawalStatus.APPROVED:
+            return Response(
+                {"detail": "Only approved withdrawals can be marked as paid."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        approved_withdrawal.paid = True
+        approved_withdrawal.save(update_fields=["paid"])
+
         withdrawal.status = WithdrawalStatus.PAID
         withdrawal.save(update_fields=["status"])
 
         # -- BACKGROUND TASK --
         # Send withdrawal paid email
-        transaction.on_commit(
-            lambda: send_withdrawal_email(
-                user=withdrawal.provider.user,
-                withdrawal=withdrawal,
-                status=WithdrawalStatus.PAID,
-            )
-        )
+        queue_withdrawal_email(withdrawal, WithdrawalStatus.PAID)
 
         return Response(self.get_serializer(approved_withdrawal).data)

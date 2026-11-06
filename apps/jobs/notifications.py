@@ -1,6 +1,7 @@
 from apps.mails.services import create_mailbox_message
 
 from apps.core.choices import UserRole
+from apps.core.constants import JOB_IN_PROGRESS_PROVIDER_PERCENT, ADMIN_FEE_RATE_PERCENT
 
 
 # job_created_notification: Creates a notification for a user when they create a job.
@@ -71,7 +72,7 @@ def create_job_cancelled_provider_partial_pay_notification(users, job):
             body=(
                 f"Hi {user.first_name},\n\n"
                 f"The job '{job.title}' has been cancelled.\n\n"
-                "Since the job was in-progress, a 20% of the job points was paid to the provider.\n\n"
+                f"Since the job was in-progress, a {JOB_IN_PROGRESS_PROVIDER_PERCENT}% of the job points was paid to the provider.\n\n"
                 "Thanks."
             ),
         )
@@ -137,7 +138,7 @@ def create_job_completion_approved_notification(user, job):
         body=(
             f"Hi {user.first_name},\n\n"
             f"The job '{job.title}' has been marked as completed.\n\n"
-            f"Please note that 10% of the job points will be deducted as the administrative fee.\n\n"
+            f"Please note that {ADMIN_FEE_RATE_PERCENT}% of the job points will be deducted as the administrative fee.\n\n"
             f"Administrative fee is {job.admin_fee_points}.\n\n"
             f"Your credited points is {job.provider_earning_points}.\n\n"
             "Please check your account for more details.\n\n"
@@ -148,7 +149,7 @@ def create_job_completion_approved_notification(user, job):
 
 def create_job_completed_by_deadline_notification(users, job):
     provider_note = (
-        f"Please note that 10% of the job points will be deducted as the administrative fee.\n\n"
+        f"Please note that {ADMIN_FEE_RATE_PERCENT}% of the job points will be deducted as the administrative fee.\n\n"
         f"Administrative fee is {job.admin_fee_points}.\n\n"
         f"Your credited points is {job.provider_earning_points}.\n\n"
     )

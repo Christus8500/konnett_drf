@@ -27,6 +27,18 @@ class PointWallet(UUIDModel):
         default=0,
     )
 
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(available_points__gte=0),
+                name="wallet_available_points_gte_0",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(locked_points__gte=0),
+                name="wallet_locked_points_gte_0",
+            ),
+        ]
+
     def __str__(self):
         return (
             f"{self.user.first_name} {self.user.last_name} - "
@@ -46,7 +58,7 @@ class PointPurchase(UUIDModel, TimeStampedModel):
         max_digits=20, decimal_places=2, validators=[MinValueValidator(Decimal("0.00"))]
     )
     points = models.PositiveIntegerField()
-    # 10% of the purchased points
+    # 10% of the purchased points(update ADMIN_FEE_RATE_PERCENT in constants if percentage changes)
     admin_fee_points = models.PositiveIntegerField(default=0)
     # Actual points credited to the customer's wallet
     credited_points = models.PositiveIntegerField(default=0)
@@ -67,7 +79,7 @@ class PointPurchase(UUIDModel, TimeStampedModel):
 class WithdrawalRequest(UUIDModel, TimeStampedModel):
     provider = models.ForeignKey(
         "providers.ProviderProfile",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="withdrawal_requests",
     )
     points = models.PositiveIntegerField(validators=[MinValueValidator(1)])
@@ -81,7 +93,7 @@ class WithdrawalRequest(UUIDModel, TimeStampedModel):
 
     processed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         blank=True,
         null=True,
         related_name="processed_withdrawal_request",

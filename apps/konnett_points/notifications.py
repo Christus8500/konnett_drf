@@ -1,9 +1,14 @@
+from django.db import transaction
 from html import escape
 
 from apps.mails.services import create_mailbox_message
 
 from apps.core.utils import send_email
 from apps.core.choices import WithdrawalStatus
+from apps.core.constants import ADMIN_FEE_RATE_PERCENT
+
+from apps.mails.tasks import process_email_outbox
+from apps.mails.services import queue_email
 
 
 def create_point_purchase_initiated_notification(user, purchase):
@@ -13,7 +18,7 @@ def create_point_purchase_initiated_notification(user, purchase):
         body=(
             f"Hi {user.first_name},\n\n"
             f"Your purchase #{purchase.payment_reference} of {purchase.points} points has been initiated.\n\n"
-            f"Please note that 10% of the purchased points will be deducted as the administrative fee.\n\n"
+            f"Please note that {ADMIN_FEE_RATE_PERCENT}% of the purchased points will be deducted as the administrative fee.\n\n"
             f"Administrative fee is {purchase.admin_fee_points}.\n\n"
             f"Your credited points is {purchase.credited_points}.\n\n"
             "Thanks."
@@ -41,7 +46,7 @@ def create_point_purchase_successful_notification(user, purchase):
         body=(
             f"Hi {user.first_name},\n\n"
             f"Your purchase #{purchase.payment_reference} of {purchase.points} points has been successful.\n\n"
-            f"Please note that 10% of the purchased points will be deducted as the administrative fee.\n\n"
+            f"Please note that {ADMIN_FEE_RATE_PERCENT}% of the purchased points will be deducted as the administrative fee.\n\n"
             f"Administrative fee is {purchase.admin_fee_points}.\n\n"
             f"Your credited points is {purchase.credited_points}.\n\n"
             "Thanks."
@@ -86,14 +91,14 @@ def send_point_purchase_email(user, purchase, *, successful: bool):
         credited_points = str(purchase.credited_points)
 
         text_content += (
-            "Please note that 10% of the purchased points "
+            f"Please note that {ADMIN_FEE_RATE_PERCENT}% of the purchased points "
             "will be deducted as the administrative fee.\n\n"
             f"Administrative fee: {admin_fee} points.\n\n"
             f"Points credited to your account: {credited_points}.\n\n"
         )
 
         html_content += (
-            "<p>Please note that 10% of the purchased points "
+            f"<p>Please note that {ADMIN_FEE_RATE_PERCENT}% of the purchased points "
             "will be deducted as the administrative fee.</p>"
             f"<p>Administrative fee: {escape(admin_fee)} points.</p>"
             f"<p>Points credited to your account: "
@@ -113,7 +118,7 @@ def send_point_purchase_email(user, purchase, *, successful: bool):
     text_content += "Thanks."
     html_content += "<p>Thanks.</p>"
 
-    return send_email(
+    send_email(
         subject=f"Point Purchase {status.title()}",
         to=user.email,
         text_content=text_content,
@@ -135,66 +140,54 @@ def send_withdrawal_email(user, withdrawal, status, reject_reason=None):
     points = str(withdrawal.points)
 
     if status == WithdrawalStatus.APPROVED:
-        text_content = (
-            f"Hi {first_name},\n\n"
+        subject = "Withdrawal Request Approved"
+        lines = [
             f"Your withdrawal request #{reference} of {points} points "
-            "was approved succesfully.\n\n"
-            "Your bank will be credited in time."
-        )
-        html_content = (
-            f"<p>Hi {escape(first_name)},</p>"
-            f"<p> Your withdrawal request #{escape(reference)} of {escape(points)} points "
-            "was approved succesfully.</p>"
-            "<p>Your bank will be credited in time.</p>"
-        )
-
-        return send_email(
-            subject=f"Withdrawal Request Approved",
-            to=user.email,
-            text_content=text_content,
-            html_content=html_content,
-        )
-
+            "was approved successfully.",
+            "Your bank will be credited in time.",
+        ]
     elif status == WithdrawalStatus.REJECTED:
-        text_content = (
-            f"Hi {first_name},\n\n"
+        subject = "Withdrawal Request Rejected"
+        lines = [
+            f"Your withdrawal request #{reference} of {points} points " "was rejected.",
+            "The reason is:",
+            str(reject_reason) if reject_reason else "No reason was provided.",
+        ]
+    elif status == WithdrawalStatus.PAID:
+        subject = "Withdrawal Request Processed"
+        lines = [
             f"Your withdrawal request #{reference} of {points} points "
-            "was rejected.\n\n"
-            "The reason is this:\n "
-            f"{str(reject_reason)}\n\n\n"
-        )
-        html_content = (
-            f"<p>Hi {escape(first_name)},</p>"
-            f"<p> Your withdrawal request #{escape(reference)} of {escape(points)} points "
-            "was rejected.</p>"
-            "<p>The reason is this:</p>"
-            f"<p>{escape(str(reject_reason))}</p>"
-        )
+            "was successful.",
+            "Payment has been made to your bank.",
+        ]
+    else:
+        raise ValueError(f"Unsupported withdrawal status: {status}")
 
-        return send_email(
-            subject=f"Withdrawal Request Rejected",
-            to=user.email,
-            text_content=text_content,
-            html_content=html_content,
-        )
+    text_content = f"Hi {first_name},\n\n" + "\n\n".join(lines)
+    html_content = f"<p>Hi {escape(first_name)},</p>" + "".join(
+        f"<p>{escape(line)}</p>" for line in lines
+    )
 
-    if status == WithdrawalStatus.PAID:
-        text_content = (
-            f"Hi {first_name},\n\n"
-            f"Your withdrawal request, #{reference} of {points} points "
-            "was succesful.\n\n"
-            "Payment has been made to your bank."
-        )
-        html_content = (
-            f"<p>Hi {escape(first_name)},</p>"
-            f"<p> Your withdrawal request, #{escape(reference)} of {escape(points)} points "
-            "was succesful.</p>"
-            "<p>Payment has been made to your bank.</p>"
-        )
+    return send_email(
+        subject=subject,
+        to=user.email,
+        text_content=text_content,
+        html_content=html_content,
+    )
 
-        return send_email(
-            subject=f"Withdrawal Request Processed",
-            to=user.email,
-            text_content=text_content,
-            html_content=html_content,
-        )
+
+def queue_withdrawal_email(withdrawal, status, reject_reason=None):
+    status = str(status)
+
+    email, _ = queue_email(
+        idempotency_key=f"withdrawal-{status}:{withdrawal.pk}",
+        recipient=withdrawal.provider.user.email,
+        email_type="withdrawal_status",
+        payload={
+            "withdrawal_pk": str(withdrawal.pk),  # UUID is not JSON serializable
+            "status": status,
+            "reject_reason": reject_reason or "",
+        },
+    )
+
+    transaction.on_commit(lambda: process_email_outbox.delay(email.pk))

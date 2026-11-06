@@ -143,6 +143,7 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
             "points",
             "withdrawal_reference",
             "status",
+            "reject_reason",
             "created_at",
             "processed_by",
             "processed_at",
@@ -152,10 +153,14 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
             "provider",
             "withdrawal_reference",
             "status",
+            "reject_reason",
             "created_at",
             "processed_by",
             "processed_at",
         ]
+
+class WithdrawalRejectSerializer(serializers.Serializer):
+    reject_reason = serializers.CharField(max_length=1000)
 
 
 class ApprovedWithdrawalRequestSerializer(serializers.ModelSerializer):

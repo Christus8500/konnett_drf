@@ -6,20 +6,24 @@ from django.db import transaction
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 
-from apps.mails.models import EmailOutbox
+from apps.core.choices import EmailOutboxStatus
 
-from apps.konnett_points.models import PointPurchase
-from apps.konnett_points.notifications import (
-    send_point_purchase_successful_email,
-    send_point_purchase_failed_email,
-)
+from apps.mails.models import EmailOutbox
 
 from apps.accounts.utils import send_account_verification_email
 
-User = get_user_model
+User = get_user_model()
 
 
 def send_outbox_email(email):
+    # Imported here to avoid a circular import with apps.konnett_points
+    from apps.konnett_points.models import PointPurchase, WithdrawalRequest
+    from apps.konnett_points.notifications import (
+        send_point_purchase_successful_email,
+        send_point_purchase_failed_email,
+        send_withdrawal_email,
+    )
+
     if email.email_type == "point_purchase_successful":
         purchase_pk = email.payload["purchase_pk"]
         purchase = PointPurchase.objects.select_related("customer__user").get(
@@ -46,6 +50,17 @@ def send_outbox_email(email):
             user=user,
         )
 
+    elif email.email_type == "withdrawal_status":
+        withdrawal = WithdrawalRequest.objects.select_related("provider__user").get(
+            pk=email.payload["withdrawal_pk"]
+        )
+        send_withdrawal_email(
+            user=withdrawal.provider.user,
+            withdrawal=withdrawal,
+            status=email.payload["status"],
+            reject_reason=email.payload.get("reject_reason") or None,
+        )
+
     else:
         raise ValueError(f"Unsupported email type: {email.email_type}")
 
@@ -56,10 +71,9 @@ def process_email_outbox(email_outbox_id):
     with transaction.atomic():
         email = (
             EmailOutbox.objects.select_for_update()
-            .select_related("purchase__customer__user")
             .filter(
                 pk=email_outbox_id,
-                status="pending",
+                status=EmailOutboxStatus.PENDING,
                 next_attempt_at__lte=timezone.now(),
             )
             .first()
@@ -68,7 +82,7 @@ def process_email_outbox(email_outbox_id):
         if email is None:
             return
 
-        email.status = "processing"
+        email.status = EmailOutboxStatus.PROCESSING
         email.processing_at = timezone.now()
         email.save(update_fields=["status", "processing_at"])
 
@@ -79,23 +93,24 @@ def process_email_outbox(email_outbox_id):
 
     except Exception as exc:
         with transaction.atomic():
-            failed_email = EmailOutbox.objects.select_for_update().get(
-                pk=email_outbox_id
+            failed = (
+                EmailOutbox.objects.select_for_update()
+                .filter(pk=email_outbox_id, status=EmailOutboxStatus.PROCESSING)
+                .first()
             )
 
-            failed_email.attempts += 1
-            failed_email.status = "pending"
-            failed_email.last_error = str(exc)
-            failed_email.processing_at = None
-
-            # Exponential delay: 1, 2, 4, 8... minutes, capped at 6 hours.
-            delay_minutes = min(2 ** (failed_email.attempts - 1), 360)
-
-            failed_email.next_attempt_at = timezone.now() + timedelta(
-                minutes=delay_minutes
-            )
-
-            failed_email.save(
+            if failed is None:
+                return
+            failed.attempts += 1
+            failed.last_error = str(exc)
+            failed.processing_at = None
+            if failed.attempts >= 8:
+                failed.status = EmailOutboxStatus.FAILED
+            else:
+                failed.status = EmailOutboxStatus.PENDING
+                delay = min(2 ** (failed.attempts - 1), 360)
+                failed.next_attempt_at = timezone.now() + timedelta(minutes=delay)
+            failed.save(
                 update_fields=[
                     "attempts",
                     "status",
@@ -108,11 +123,8 @@ def process_email_outbox(email_outbox_id):
         return
 
     # Mark as sent only after the sender returns successfully.
-    EmailOutbox.objects.filter(
-        pk=email_outbox_id,
-        status="processing",
-    ).update(
-        status="sent",
+    EmailOutbox.objects.filter(pk=email_outbox_id, status=EmailOutboxStatus.PROCESSING).update(
+        status=EmailOutboxStatus.SENT,
         sent_at=timezone.now(),
         processing_at=None,
         last_error="",
@@ -122,33 +134,28 @@ def process_email_outbox(email_outbox_id):
 @shared_task
 def process_pending_emails():
     now = timezone.now()
+    stuck_cutoff = now - timedelta(minutes=15)
 
-    # Queue a limited batch of due pending records.
+    # Recover records left in processing if a worker crashed.
+    # One query instead of one per row.
+    EmailOutbox.objects.filter(
+        status=EmailOutboxStatus.PROCESSING,
+        processing_at__lt=stuck_cutoff,
+    ).update(
+        status=EmailOutboxStatus.PENDING,
+        processing_at=None,
+        next_attempt_at=now,
+    )
+
+    # Queue a limited batch of due pending records, oldest first.
     pending_ids = list(
         EmailOutbox.objects.filter(
-            status="pending",
+            status=EmailOutboxStatus.PENDING,
             next_attempt_at__lte=now,
-        ).values_list("id", flat=True)[:100]
+        )
+        .order_by("next_attempt_at")
+        .values_list("id", flat=True)[:100]
     )
 
     for email_id in pending_ids:
         process_email_outbox.delay(email_id)
-
-    # Recover records left in processing if a worker crashed.
-    stuck_ids = list(
-        EmailOutbox.objects.filter(
-            status="processing",
-            processing_at__lt=now - timedelta(minutes=15),
-        ).values_list("id", flat=True)[:100]
-    )
-
-    for email_id in stuck_ids:
-        EmailOutbox.objects.filter(
-            pk=email_id,
-            status="processing",
-            processing_at__lt=now - timedelta(minutes=15),
-        ).update(
-            status="pending",
-            processing_at=None,
-            next_attempt_at=now,
-        )

@@ -145,13 +145,13 @@ CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 min hard limit per task
 
 CELERY_BEAT_SCHEDULE = {
     "check-pending-emails-every-minute": {
-        "task": "konnett_points.tasks.process_pending_emails",
+        "task": "apps.konnett_points.tasks.process_pending_emails",
         "schedule": crontab(minute="*"),
     },
-    # "expire-overdue-jobs-every-minute": {
-    #     "task": "apps.jobs.tasks.expire_overdue_jobs",
-    #     "schedule": crontab(),
-    # },
+    "expire-overdue-jobs-every-minute": {
+        "task": "apps.jobs.tasks.expire_overdue_jobs",
+        "schedule": crontab(),
+    },
 }
 
 
@@ -175,6 +175,16 @@ EMAIL_REPLY_TO = os.getenv(
     "EMAIL_REPLY_TO",
     DEFAULT_FROM_EMAIL,
 )
+EMAIL_TIMEOUT = 10
+
+
+# --- LOGGING ---
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "loggers": {"apps": {"handlers": ["console"], "level": "INFO"}},
+}
 
 
 # Password validation

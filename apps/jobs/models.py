@@ -95,9 +95,9 @@ class JobCompletionImage(UUIDModel):
         return f"Completion image for {self.job}, by {self.provider}"
 
 
-# TODO: 
+# TODO:
 # Let the provider know of or see the admin fee,
-# 10% of the job points
+# 10% of the job points(update ADMIN_FEE_RATE_PERCENT in constants if percentage changes)
 class JobRequestOffer(UUIDModel, TimeStampedModel):
     job = models.ForeignKey(
         JobRequest, on_delete=models.CASCADE, related_name="job_offers"
@@ -116,7 +116,12 @@ class JobRequestOffer(UUIDModel, TimeStampedModel):
             models.UniqueConstraint(
                 fields=["job", "provider"],
                 name="unique_job_provider_offer",
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["job"],
+                condition=models.Q(status=JobOfferStatus.ACCEPTED),
+                name="one_accepted_offer_per_job",
+            ),
         ]
         ordering = ["-created_at"]
 
@@ -181,4 +186,3 @@ class ProviderRating(UUIDModel, TimeStampedModel):
 
     def __str__(self):
         return f"{self.provider} - {self.rating}/5"
-    
