@@ -84,30 +84,26 @@ def expire_job(job, in_progress_percentage=JOB_IN_PROGRESS_PROVIDER_PERCENT):
     # --------------------------------------------------
     # PENDING / OPEN: cancel and refund 100%
     # --------------------------------------------------
-    if job.status in (
-        JobRequestStatus.PENDING,
-        JobRequestStatus.OPEN,
-    ):
+    if job.status in (JobRequestStatus.PENDING, JobRequestStatus.OPEN):
+        pending_offers = list(
+            job.job_offers.select_related("provider__user").filter(
+                status=JobOfferStatus.PENDING
+            )
+        )
+
         job.status = JobRequestStatus.CANCELLED
         job.save(update_fields=["status"])
 
-        # Return 100% of the customer's reserved points.
-        release_reserved_points(
-            job,
-            transaction_type=TransactionType.REFUND,
-        )
+        release_reserved_points(job, transaction_type=TransactionType.REFUND)
 
-        # Notify the customer and all providers who made offers of cancelled job
-        users = [job.customer.user]
-        users.extend(
-            offer.provider.user
-            for offer in job.job_offers.select_related("provider__user").all()
-        )
+        JobRequestOffer.objects.filter(
+            pk__in=[o.pk for o in pending_offers]
+        ).update(status=JobOfferStatus.REJECTED)
 
+        users = [job.customer.user] + [o.provider.user for o in pending_offers]
         transaction.on_commit(
             lambda: create_job_cancelled_notification(users=users, job=job)
         )
-
         return True
 
     

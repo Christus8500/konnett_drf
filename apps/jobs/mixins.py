@@ -21,6 +21,18 @@ class JobRequestMixin:
             ),
             pk=self.kwargs["pk"],
         )
+    
+    def get_locked_job(self):
+        """
+        Same as get_job(), but locks the job row until the transaction ends.
+        Only call this inside @transaction.atomic.
+        """
+        return get_object_or_404(
+            JobRequest.objects.select_for_update(of=("self",)).select_related(
+                "customer__user"
+            ),
+            pk=self.kwargs["pk"],
+        )
 
     def check_job_owner(self, job):
         """
@@ -38,7 +50,7 @@ class JobRequestMixin:
             raise ValidationError(message)
 
     def ensure_job_is_pending_or_open(
-        self, job, message="Only pending or open jobs can be modified."
+        self, job, message="Only pending or open jobs can be cancelled."
     ):
         if job.status not in [JobRequestStatus.PENDING, JobRequestStatus.OPEN]:
             raise ValidationError(message)

@@ -120,6 +120,14 @@ class ApprovedWithdrawalRequest(UUIDModel):
     paid = models.BooleanField(default=False)
     paid_on = models.DateTimeField(blank=True, null=True)
 
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["withdrawal"],
+                name="one_approved_record_per_withdrawal",
+            )
+        ]
+
     def save(self, *args, **kwargs):
         if self.paid and self.paid_on is None:
             self.paid_on = timezone.now()

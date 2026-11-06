@@ -1,7 +1,8 @@
 from functools import partial
 
 from django.db import transaction
-from django.db.models import F, Prefetch, Avg
+from django.db.models import F, Q, Prefetch, Avg
+from django.utils import timezone
 from django.shortcuts import get_object_or_404
 
 from django_filters.rest_framework import DjangoFilterBackend
@@ -109,7 +110,7 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
 
         dispute_queryset = JobDispute.objects.select_related(
             "job",
-            "job__customer",
+            "job__customer__user",
         )
 
         queryset = JobRequest.objects.select_related(
@@ -140,7 +141,15 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
             return queryset.filter(customer=user.customer_profile)
 
         if hasattr(user, "provider_profile"):
-            return queryset.filter(status=JobRequestStatus.PENDING)
+            own_job_ids = JobRequestOffer.objects.filter(
+                provider=user.provider_profile,
+                status=JobOfferStatus.ACCEPTED,
+            ).values("job_id")
+
+            return queryset.filter(
+                Q(status__in=[JobRequestStatus.PENDING, JobRequestStatus.OPEN])
+                | Q(pk__in=own_job_ids)
+            )
 
         return queryset.none()
 
@@ -205,6 +214,15 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
             lambda: create_job_created_notification(user=self.request.user, job=job)
         )
 
+    @transaction.atomic
+    def perform_update(self, serializer):
+        images = serializer.validated_data.pop("images", [])
+        job = serializer.save()
+
+        JobRequestImage.objects.bulk_create(
+            [JobRequestImage(job=job, image=image) for image in images]
+        )
+
     # ^ partial_update updates a job request instance.
     # It ensures that the job is still pending before allowing the update.
     # If the job is not pending, an error message is returned.
@@ -237,24 +255,27 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
         job = self.get_object()
         self.ensure_job_is_pending_or_open(job)
 
+        # Capture live offers BEFORE changing anything.
+        pending_offers = list(
+            job.job_offers.select_related("provider__user").filter(
+                status=JobOfferStatus.PENDING
+            )
+        )
+
         job.status = JobRequestStatus.CANCELLED
         job.save(update_fields=["status"])
 
         release_reserved_points(job, transaction_type=TransactionType.UNLOCK)
 
-        # Notify the customer and all providers who made offers.
-        # -- If you think users might be around 200, consider moving to celery
-        users = [job.customer.user]
-        # extend() adds individual elements from an iterable (in this case, the providers' users) to the end of the list (users).
-        users.extend(
-            offer.provider.user
-            for offer in job.job_offers.select_related("provider__user").all()
+        JobRequestOffer.objects.filter(pk__in=[o.pk for o in pending_offers]).update(
+            status=JobOfferStatus.REJECTED
         )
+
+        # Notify the customer and all providers whose offers are still pending.
+        # -- If you think users might be around 200, consider moving to celery
+        users = [job.customer.user] + [o.provider.user for o in pending_offers]
         transaction.on_commit(
-            lambda: create_job_cancelled_notification(
-                users=users,
-                job=job,
-            )
+            lambda: create_job_cancelled_notification(users=users, job=job)
         )
 
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -395,37 +416,44 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
                 status=status.HTTP_405_METHOD_NOT_ALLOWED,
             )
 
-        job = self.get_job()
+        job = self.get_locked_job()  # from Step 14
         self.ensure_job_is_pending_or_open(
             job, "This job is no longer accepting offers."
         )
 
-        # Check if the provider has already submitted an offer for this job.
-        if JobRequestOffer.objects.filter(
-            job=job,
-            provider=request.user.provider_profile,
-        ).exists():
+        if job.deadline is not None and job.deadline <= timezone.now():
+            raise ValidationError({"detail": "This job's deadline has passed."})
+
+        provider = request.user.provider_profile
+
+        existing = (
+            JobRequestOffer.objects.select_for_update(of=("self",))
+            .filter(job=job, provider=provider)
+            .first()
+        )
+
+        if existing is None:
+            serializer = self.get_serializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            offer = serializer.save(job=job, provider=provider)
+            data = serializer.data
+        elif existing.status == JobOfferStatus.WITHDRAWN:
+            # Re-offer: reuse the withdrawn row (the unique constraint allows only one per provider).
+            existing.status = JobOfferStatus.PENDING
+            existing.save(update_fields=["status"])  # the signal moves the job to OPEN
+            offer = existing
+            data = self.get_serializer(existing).data
+        else:
             return Response(
                 {"detail": "You have already submitted an offer for this job."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save(
-            job=job,
-            provider=request.user.provider_profile,
-        )
-
-        # Notify the job owner, of a new offer
         transaction.on_commit(
             lambda: create_job_new_offer_notification(user=job.customer.user, job=job)
         )
 
-        return Response(
-            serializer.data,
-            status=status.HTTP_201_CREATED,
-        )
+        return Response(data, status=status.HTTP_201_CREATED)
 
 
 class JobOfferAcceptView(JobRequestMixin, ProviderMixin, APIView):
@@ -444,91 +472,63 @@ class JobOfferAcceptView(JobRequestMixin, ProviderMixin, APIView):
     )
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
-        # Get the job ID associated with this offer.
         initial_offer = get_object_or_404(
             JobRequestOffer.objects.only("pk", "job_id"),
             pk=self.kwargs["pk"],
         )
 
-        # Lock the job row.
-        # Other acceptance requests for this same job must wait until this transaction finishes.
         job = get_object_or_404(
-            JobRequest.objects.select_for_update(),
+            JobRequest.objects.select_for_update(of=("self",)).select_related(
+                "customer__user"
+            ),
             pk=initial_offer.job_id,
         )
-
-        # Re-fetch and lock the offer after acquiring the job lock.
         offer = get_object_or_404(
-            JobRequestOffer.objects.select_for_update().select_related(
-                "provider__user",
+            JobRequestOffer.objects.select_for_update(of=("self",)).select_related(
+                "provider__user"
             ),
             pk=self.kwargs["pk"],
             job=job,
         )
 
-        # Perform these checks AFTER acquiring the locks.
         self.check_job_owner(job)
+        self.ensure_job_is_open(job, "Offers can only be managed while the job is open")
+        self.ensure_offer_is_pending(offer, "This offer has already been processed.")
 
-        self.ensure_job_is_open(
-            job,
-            "Offers can only be managed while the job is open",
+        if job.deadline is not None and job.deadline <= timezone.now():
+            raise ValidationError({"detail": "This job's deadline has passed."})
+
+        # Offers about to be rejected (captured BEFORE the update).
+        other_offers = list(
+            JobRequestOffer.objects.select_related("provider__user")
+            .filter(job=job, status=JobOfferStatus.PENDING)
+            .exclude(pk=offer.pk)
         )
 
-        self.ensure_offer_is_pending(
-            offer,
-            "This offer has already been processed.",
-        )
-
-        # Accept this offer.
         offer.status = JobOfferStatus.ACCEPTED
         offer.save(update_fields=["status"])
 
-        # Reject all other pending offers for this job.
-        JobRequestOffer.objects.filter(
-            job=job,
-            status=JobOfferStatus.PENDING,
-        ).exclude(
-            pk=offer.pk,
-        ).update(
-            status=JobOfferStatus.REJECTED,
+        JobRequestOffer.objects.filter(pk__in=[o.pk for o in other_offers]).update(
+            status=JobOfferStatus.REJECTED
         )
 
-        # Mark the job as in progress.
         job.status = JobRequestStatus.IN_PROGRESS
         job.save(update_fields=["status"])
 
-        # Notify the accepted provider after commit.
         transaction.on_commit(
             lambda: create_job_offer_accepted_notification(
-                user=offer.provider.user,
-                job=job,
+                user=offer.provider.user, job=job
             )
         )
 
-        # Notify rejected providers.
-        rejected_offers = (
-            JobRequestOffer.objects.filter(
-                job=job,
-                status=JobOfferStatus.REJECTED,
-            )
-            .exclude(pk=offer.pk)
-            .select_related("provider__user")
-        )
-
-        for rejected_offer in rejected_offers:
+        for rejected in other_offers:
             transaction.on_commit(
-                lambda user=rejected_offer.provider.user: (
-                    create_job_offer_rejected_notification(
-                        user=user,
-                        job=job,
-                    )
+                lambda user=rejected.provider.user: create_job_offer_rejected_notification(
+                    user=user, job=job
                 )
             )
 
-        return Response(
-            {"detail": "Offer accepted."},
-            status=status.HTTP_200_OK,
-        )
+        return Response({"detail": "Offer accepted."}, status=status.HTTP_200_OK)
 
 
 class JobOfferRejectView(JobRequestMixin, ProviderMixin, APIView):
@@ -545,39 +545,43 @@ class JobOfferRejectView(JobRequestMixin, ProviderMixin, APIView):
     )
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
-        offer = get_object_or_404(
-            JobRequestOffer.objects.select_related(
-                "job",
-                "job__customer",
-                "job__customer__user",
-            ),
+        initial_offer = get_object_or_404(
+            JobRequestOffer.objects.only("pk", "job_id"),
             pk=self.kwargs["pk"],
         )
-        job = offer.job
+
+        job = get_object_or_404(
+            JobRequest.objects.select_for_update(of=("self",)).select_related(
+                "customer__user"
+            ),
+            pk=initial_offer.job_id,
+        )
+        offer = get_object_or_404(
+            JobRequestOffer.objects.select_for_update(of=("self",)).select_related(
+                "provider__user"
+            ),
+            pk=self.kwargs["pk"],
+            job=job,
+        )
 
         self.check_job_owner(job)
         self.ensure_job_is_open(
-            job,
-            "You can only reject offers while the job is open.",
+            job, "You can only reject offers while the job is open."
         )
-
         self.ensure_offer_is_pending(offer, "This offer has already been processed.")
 
         offer.status = JobOfferStatus.REJECTED
-        offer.save(update_fields=["status"])
+        offer.save(
+            update_fields=["status"]
+        )  # the update_job_status_on_offer_change signal moves the job to PENDING if none are left
 
-        # Notify rejected provider
         transaction.on_commit(
             lambda: create_job_offer_rejected_notification(
-                user=offer.provider.user,
-                job=job,
+                user=offer.provider.user, job=job
             )
         )
 
-        return Response(
-            {"detail": "Offer rejected."},
-            status=status.HTTP_200_OK,
-        )
+        return Response({"detail": "Offer rejected."}, status=status.HTTP_200_OK)
 
 
 class JobOfferWithdrawView(ProviderMixin, JobRequestMixin, APIView):
@@ -594,29 +598,33 @@ class JobOfferWithdrawView(ProviderMixin, JobRequestMixin, APIView):
     )
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
-        offer = get_object_or_404(
-            JobRequestOffer.objects.select_related(
-                "job",
-                "job__customer",
-                "job__customer__user",
-                "provider",
-            ),
+        initial_offer = get_object_or_404(
+            JobRequestOffer.objects.only("pk", "job_id"),
             pk=self.kwargs["pk"],
         )
-        job = offer.job
+
+        # Lock order everywhere: job first, then offer.
+        job = get_object_or_404(
+            JobRequest.objects.select_for_update(of=("self",)),
+            pk=initial_offer.job_id,
+        )
+        offer = get_object_or_404(
+            JobRequestOffer.objects.select_for_update(of=("self",)).select_related(
+                "provider__user"
+            ),
+            pk=self.kwargs["pk"],
+            job=job,
+        )
 
         self.check_offer_owner(offer)
         self.ensure_job_is_open(job, "You can only withdraw offers from open jobs.")
-
         self.ensure_offer_is_pending(offer, "Only pending offers can be withdrawn.")
 
+        # The post_save signal moves the job back to PENDING if this was the last pending offer.
         offer.status = JobOfferStatus.WITHDRAWN
         offer.save(update_fields=["status"])
 
-        return Response(
-            {"detail": "Offer withdrawn."},
-            status=status.HTTP_200_OK,
-        )
+        return Response({"detail": "Offer withdrawn."}, status=status.HTTP_200_OK)
 
 
 class JobCompletionImageCreateView(
@@ -696,12 +704,19 @@ class JobRequestCompletionView(JobRequestMixin, ProviderMixin, APIView):
     )
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
-        job = self.get_job()
+        job = self.get_locked_job()
 
         self.ensure_job_is_in_progress(
             job, "Only the jobs in progress can request completion"
         )
         self.check_accepted_provider(job)
+
+        # After the deadline, Celery settles the job. Without this check a provider
+        # could submit late and be paid in full instead of the partial percentage.
+        if job.deadline is not None and job.deadline <= timezone.now():
+            raise ValidationError(
+                "The deadline has passed. This job will be settled automatically."
+            )
 
         # Ensure that at least one completion image has been uploaded before allowing the provider to request completion.
         if not job.job_completion_images.exists():
@@ -746,12 +761,7 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
     )
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
-        job = get_object_or_404(
-            JobRequest.objects.select_for_update(of=("self",)).select_related(
-                "customer__user"
-            ),
-            pk=self.kwargs["pk"],
-        )
+        job = self.get_locked_job()
 
         self.check_job_owner(job)
         self.ensure_job_is_awaiting_confirmation(
@@ -835,17 +845,20 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
     # It ensures that the job is still awaiting confirmation before allowing the creation of a dispute.
     @transaction.atomic
     def create(self, request, *args, **kwargs):
-        job = get_object_or_404(
-            JobRequest.objects.select_for_update(of=("self",)).select_related(
-                "customer__user"
-            ),
-            pk=self.kwargs["pk"],
-        )
+        job = self.get_locked_job()
 
         self.check_job_owner(job)
         self.ensure_job_is_awaiting_confirmation(
             job, "Only the jobs awaiting confirmation can be disputed."
         )
+
+        if job.deadline is not None and job.deadline <= timezone.now():
+            return Response(
+                {
+                    "detail": "The deadline has passed. This job will be settled automatically."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         accepted_offer = get_object_or_404(
             JobRequestOffer.objects.select_related("provider__user"),

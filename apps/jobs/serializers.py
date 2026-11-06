@@ -3,10 +3,11 @@ from django.utils import timezone
 
 from rest_framework import serializers
 
-from apps.core.constants import MAX_JOB_REQUEST_IMAGES
+from apps.core.constants import MAX_JOB_REQUEST_IMAGES, MINIMUM_JOB_POINTS
 from apps.core.validators import validate_image
 from apps.core.models import Address
 from apps.core.serializers import AddressSerializer
+from apps.core.choices import JobOfferStatus
 
 from apps.providers.models import ProviderProfile
 
@@ -33,10 +34,7 @@ class JobRequestImageSerializer(serializers.ModelSerializer):
 
 
 class JobConfirmCompletionSerializer(serializers.Serializer):
-    rating = serializers.IntegerField(
-        min_value=1,
-        max_value=5
-    )
+    rating = serializers.IntegerField(min_value=1, max_value=5)
 
 
 class JobCompletionImageSerializer(serializers.Serializer):
@@ -60,12 +58,13 @@ class JobRequestOfferSerializer(serializers.ModelSerializer):
             ]
 
     provider = MiniProviderProfileSerializer(read_only=True)
-    job = serializers.StringRelatedField(read_only=True)
+    job = serializers.CharField(source="job.title", read_only=True)
+    job_id = serializers.UUIDField(read_only=True)
     job_status = serializers.CharField(source="job.status", read_only=True)
 
     class Meta:
         model = JobRequestOffer
-        fields = ["id", "provider", "status", "job", "job_status"]
+        fields = ["id", "provider", "status", "job", "job_id", "job_status"]
         read_only_fields = fields
 
 
@@ -97,11 +96,11 @@ class JobDisputeSerializer(serializers.ModelSerializer):
 
 
 class JobRequestReadSerializer(serializers.ModelSerializer):
-    customer = serializers.StringRelatedField()
+    customer = serializers.SerializerMethodField()
     category = serializers.StringRelatedField()
 
-    primary_location = AddressSerializer(read_only=True)
-    secondary_location = AddressSerializer(read_only=True)
+    primary_location = serializers.SerializerMethodField()
+    secondary_location = serializers.SerializerMethodField()
 
     request_images = JobRequestImageSerializer(
         many=True,
@@ -121,7 +120,7 @@ class JobRequestReadSerializer(serializers.ModelSerializer):
         read_only=True,
     )
 
-    dispute = JobDisputeSerializer(read_only=True)
+    offers = serializers.SerializerMethodField()
 
     class Meta:
         model = JobRequest
@@ -151,6 +150,60 @@ class JobRequestReadSerializer(serializers.ModelSerializer):
             "completed_at",
             "created_at",
         ]
+
+    def get_customer(self, job):
+        if self._can_see_full_details(job):
+            return job.customer.fullname
+        return job.customer.user.first_name or "Customer"
+
+    def get_offers(self, job):
+        user = self.context["request"].user
+
+        # job_offers is prefetched, so this uses the cache. Don't add .filter() here.
+        offers = list(job.job_offers.all())
+
+        is_owner = job.customer.user_id == user.id
+        if not (user.is_staff or is_owner):
+            # Providers only ever see their own offer.
+            offers = [o for o in offers if o.provider.user_id == user.id]
+
+        return JobRequestOfferSerializer(offers, many=True, context=self.context).data
+
+    def _can_see_full_details(self, job):
+        """
+        Full address: admin, the job's customer, or the accepted provider.
+        Uses the prefetched job_offers, so it adds no queries.
+        """
+        request = self.context.get("request")
+        if request is None or not request.user.is_authenticated:
+            return False
+
+        user = request.user
+
+        if user.is_staff or job.customer.user_id == user.id:
+            return True
+
+        return any(
+            offer.status == JobOfferStatus.ACCEPTED
+            and offer.provider.user_id == user.id
+            for offer in job.job_offers.all()
+        )
+
+    def _serialize_location(self, job, address):
+        if address is None:
+            return None
+
+        if self._can_see_full_details(job):
+            return AddressSerializer(address, context=self.context).data
+
+        # Everyone else: area only. No street, no coordinates, no address id.
+        return {"city": address.city, "state": address.state}
+
+    def get_primary_location(self, job):
+        return self._serialize_location(job, job.primary_location)
+
+    def get_secondary_location(self, job):
+        return self._serialize_location(job, job.secondary_location)
 
 
 class JobRequestWriteSerializer(serializers.ModelSerializer):
@@ -189,9 +242,23 @@ class JobRequestWriteSerializer(serializers.ModelSerializer):
 
         return value
 
+    def validate_points_amount(self, value):
+        if value < MINIMUM_JOB_POINTS:
+            raise serializers.ValidationError(
+                f"Points amount must be at least {MINIMUM_JOB_POINTS}."
+            )
+        return value
+
     def validate(self, attrs):
-        category = attrs.get("category")
-        secondary_location = attrs.get("secondary_location")
+        instance = self.instance  # None on create
+
+        category = attrs.get("category") or (instance.category if instance else None)
+
+        # On a PATCH, fall back to what the job already has.
+        if "secondary_location" in attrs:
+            secondary_location = attrs["secondary_location"]
+        else:
+            secondary_location = instance.secondary_location if instance else None
 
         if category and category.requires_secondary_location and not secondary_location:
             raise serializers.ValidationError(
@@ -203,8 +270,9 @@ class JobRequestWriteSerializer(serializers.ModelSerializer):
             )
 
         images = attrs.get("images", [])
+        existing_images = instance.job_request_images.count() if instance else 0
 
-        if len(images) > MAX_JOB_REQUEST_IMAGES:
+        if existing_images + len(images) > MAX_JOB_REQUEST_IMAGES:
             raise serializers.ValidationError(
                 {
                     "images": (
@@ -215,6 +283,29 @@ class JobRequestWriteSerializer(serializers.ModelSerializer):
             )
 
         return attrs
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        # Images are handled by the view (perform_update).
+        validated_data.pop("images", None)
+
+        primary_data = validated_data.pop("primary_location", None)
+        secondary_data = validated_data.pop("secondary_location", None)
+
+        if primary_data:
+            for field, value in primary_data.items():
+                setattr(instance.primary_location, field, value)
+            instance.primary_location.save()
+
+        if secondary_data:
+            if instance.secondary_location is None:
+                instance.secondary_location = Address.objects.create(**secondary_data)
+            else:
+                for field, value in secondary_data.items():
+                    setattr(instance.secondary_location, field, value)
+                instance.secondary_location.save()
+
+        return super().update(instance, validated_data)
 
     @transaction.atomic
     def create(self, validated_data):
@@ -255,6 +346,7 @@ class AdminJobDisputeSerializer(serializers.ModelSerializer):
     class Meta:
         model = JobDispute
         fields = [
+            "id",
             "job",
             "customer",
             "customer_reason",
@@ -262,6 +354,7 @@ class AdminJobDisputeSerializer(serializers.ModelSerializer):
             "decision",
         ]
         read_only_fields = [
+            "id",
             "job",
             "customer",
             "customer_reason",

@@ -21,14 +21,9 @@ def withdrawal_request_saved(sender, instance, **kwargs):
             withdrawal=instance
         )
 
-    provider_cache_key = (
-        f"withdrawal_requests:provider:{instance.provider_id}"
-    )
-    admin_cache_key = "withdrawal_requests:admin:pending"
-
     def clear_cache():
-        cache.delete_pattern(f"*{provider_cache_key}*")
-        cache.delete(admin_cache_key)
+        cache.delete_pattern(f"*withdrawal_requests:provider:{instance.provider_id}*")
+        cache.delete_pattern("*withdrawal_requests:admin:pending*")
 
     transaction.on_commit(clear_cache)
 

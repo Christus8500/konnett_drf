@@ -421,7 +421,7 @@ class WithdrawalRequestListCreateView(
 
     def list(self, request, *args, **kwargs):
         if request.user.is_staff:
-            cache_key = "withdrawal_requests:admin:pending"
+            cache_key = f"withdrawal_requests:admin:pending:{request.GET.urlencode()}"
         else:
             provider_id = request.user.provider_profile.id
             cache_key = (

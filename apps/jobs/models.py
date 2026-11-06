@@ -5,6 +5,7 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 
 from apps.core.choices import JobRequestStatus, JobOfferStatus, JobDisputeDecision
 from apps.core.models import UUIDModel, TimeStampedModel
+from apps.core.constants import MINIMUM_JOB_POINTS
 
 
 # custom upload paths for job request and completion images
@@ -29,7 +30,7 @@ class JobRequest(UUIDModel, TimeStampedModel):
     title = models.CharField(max_length=255)
     description = models.TextField()
 
-    points_amount = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    points_amount = models.PositiveIntegerField(validators=[MinValueValidator(MINIMUM_JOB_POINTS)])
 
     deadline = models.DateTimeField(blank=True, null=True)
 
