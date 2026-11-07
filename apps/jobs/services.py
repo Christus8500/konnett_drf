@@ -23,8 +23,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-# TODO:
-# Setup Celery and wire this
 @transaction.atomic
 def expire_job(job, in_progress_percentage=JOB_IN_PROGRESS_PROVIDER_PERCENT):
     """

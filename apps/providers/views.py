@@ -20,7 +20,7 @@ from apps.providers.serializers import (
     ProviderProfileSerializer,
     ProviderVerificationSerializer,
 )
-from apps.providers.notifications import send_provider_verification_email
+from apps.providers.notifications import queue_provider_verification_email
 
 # Create your views here.
 
@@ -102,6 +102,7 @@ class AdminPendingProviderVerificationsListView(generics.ListAPIView):
 
 # API view for updating the verification status of a provider. This view is restricted to admin users only.
 
+
 @extend_schema(
     request=OpenApiTypes.OBJECT,
     responses={
@@ -143,8 +144,7 @@ def update_provider_verification_status(request, provider_id):
             return Response(
                 {
                     "error": (
-                        "Admin comment is required when rejecting "
-                        "a verification."
+                        "Admin comment is required when rejecting " "a verification."
                     )
                 },
                 status=status.HTTP_400_BAD_REQUEST,
@@ -176,17 +176,10 @@ def update_provider_verification_status(request, provider_id):
 
     verification.provider.save(update_fields=["is_verified"])
 
-    email_status = verification_status
-    email_comment = admin_comment
-
     # -- BACKGROUND TASK --
-    # Send email based on the verification status.
-    transaction.on_commit(
-        lambda: send_provider_verification_email(
-            user=verification.provider.user,
-            status=email_status,
-            admin_comment=email_comment,
-        )
+    # Queue email.
+    queue_provider_verification_email(
+        verification, verification_status, admin_comment=admin_comment
     )
 
     return Response(

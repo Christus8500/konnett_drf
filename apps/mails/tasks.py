@@ -24,6 +24,9 @@ def send_outbox_email(email):
         send_withdrawal_email,
     )
 
+    from apps.providers.models import ProviderVerification
+    from apps.providers.notifications import send_provider_verification_email
+
     if email.email_type == "point_purchase_successful":
         purchase_pk = email.payload["purchase_pk"]
         purchase = PointPurchase.objects.select_related("customer__user").get(
@@ -59,6 +62,17 @@ def send_outbox_email(email):
             withdrawal=withdrawal,
             status=email.payload["status"],
             reject_reason=email.payload.get("reject_reason") or None,
+        )
+
+    elif email.email_type == "provider_verification":
+        verification_pk = email.payload["verification_pk"]
+        verification = ProviderVerification.objects.select_related("provider__user").get(
+            pk=verification_pk
+        )
+        send_provider_verification_email(
+            user=verification.provider.user,
+            status=email.payload["status"],
+            admin_comment=email.payload.get("admin_comment") or None
         )
 
     else:
@@ -123,7 +137,9 @@ def process_email_outbox(email_outbox_id):
         return
 
     # Mark as sent only after the sender returns successfully.
-    EmailOutbox.objects.filter(pk=email_outbox_id, status=EmailOutboxStatus.PROCESSING).update(
+    EmailOutbox.objects.filter(
+        pk=email_outbox_id, status=EmailOutboxStatus.PROCESSING
+    ).update(
         status=EmailOutboxStatus.SENT,
         sent_at=timezone.now(),
         processing_at=None,

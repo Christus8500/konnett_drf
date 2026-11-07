@@ -37,7 +37,6 @@ BACKEND_URL = os.getenv("BACKEND_URL")
 
 
 # Application definition
-
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -104,7 +103,6 @@ WSGI_APPLICATION = "konnett.wsgi.application"
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
-
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
@@ -143,6 +141,10 @@ CELERY_TIMEZONE = "UTC"
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 min hard limit per task
 
+# TODO: 
+# Check if this beat schedule is correct 
+# Or maybe you necessarily need this
+# CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 CELERY_BEAT_SCHEDULE = {
     "check-pending-emails-every-minute": {
         "task": "apps.konnett_points.tasks.process_pending_emails",

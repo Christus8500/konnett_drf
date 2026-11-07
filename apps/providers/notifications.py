@@ -1,7 +1,12 @@
 from html import escape
 
+from django.db import transaction
+
 from apps.core.utils import send_email
 from apps.core.choices import ProviderVerificationStatus
+
+from apps.mails.services import queue_email
+from apps.mails.tasks import process_email_outbox
 
 
 def send_provider_verification_email(user, status, admin_comment=None):
@@ -52,3 +57,18 @@ def send_provider_verification_email(user, status, admin_comment=None):
         text_content=text_content,
         html_content=html_content,
     )
+
+
+def queue_provider_verification_email(verification, status, admin_comment=None):
+    email, _ = queue_email(
+        idempotency_key=f"provider-verification-{status}:{verification.pk}",
+        recipient=verification.provider.user.email,
+        email_type="provider_verification",
+        payload={
+            "verification_pk": str(verification.pk),
+            "status": status,
+            "admin_comment": admin_comment or "",
+        },
+    )
+
+    transaction.on_commit(lambda: process_email_outbox.delay(email.pk))

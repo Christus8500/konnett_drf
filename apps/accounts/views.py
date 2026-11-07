@@ -77,7 +77,6 @@ class RegisterView(generics.CreateAPIView):
         )
 
         # QUeue verification email after the transaction is committed 
-        # -- BACKGROUND TASK
         email, _ = queue_email(
             idempotency_key=f"account-verification:{user.pk}",
             recipient=user.email,

@@ -565,8 +565,7 @@ class WithdrawalApproveView(generics.UpdateAPIView):
             ]
         )
 
-        # -- BACKGROUND TASK --
-        # Send withdrawal approved email
+        # Queue withdrawal approved email
         queue_withdrawal_email(withdrawal, WithdrawalStatus.APPROVED)
 
         return Response(
@@ -645,8 +644,7 @@ class WithdrawalRejectView(generics.UpdateAPIView):
             ]
         )
 
-        # -- BACKGROUND TASK --
-        # Send withdrawal rejected email
+        # Queue withdrawal rejected email
         queue_withdrawal_email(
             withdrawal,
             WithdrawalStatus.REJECTED,
@@ -701,8 +699,7 @@ class ApprovedWithdrawalRequestPaidView(generics.UpdateAPIView):
         withdrawal.status = WithdrawalStatus.PAID
         withdrawal.save(update_fields=["status"])
 
-        # -- BACKGROUND TASK --
-        # Send withdrawal paid email
+        # Queue withdrawal paid email
         queue_withdrawal_email(withdrawal, WithdrawalStatus.PAID)
 
         return Response(self.get_serializer(approved_withdrawal).data)
