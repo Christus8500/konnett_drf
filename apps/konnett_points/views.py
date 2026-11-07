@@ -224,7 +224,7 @@ class PointPurchaseVerificationView(APIView):
                 idempotency_key=f"point-purchase-failed:{purchase.pk}",
                 recipient=purchase.customer.user.email,
                 email_type="point_purchase_failed",
-                payload={"purchase_pk": purchase.pk},
+                payload={"purchase_pk": str(purchase.pk)},
             )
 
             # Both the notification and Celery task are triggered only
@@ -314,7 +314,7 @@ class PointPurchaseVerificationView(APIView):
             idempotency_key=f"point-purchase-success:{purchase.pk}",
             recipient=purchase.customer.user.email,
             email_type="point_purchase_successful",
-            payload={"purchase_id": purchase.pk},
+            payload={"purchase_pk": str(purchase.pk)},
         )
 
         # Create the in-app notification only after the transaction commits.

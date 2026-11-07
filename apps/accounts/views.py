@@ -81,7 +81,7 @@ class RegisterView(generics.CreateAPIView):
             idempotency_key=f"account-verification:{user.pk}",
             recipient=user.email,
             email_type="account_verification",
-            payload={"user_id" : user.pk},
+            payload={"user_pk" : str(user.pk)},
         )
 
         transaction.on_commit(

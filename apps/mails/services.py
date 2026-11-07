@@ -2,6 +2,8 @@ from django.utils import timezone
 
 from apps.mails.models import MailboxMessage, EmailOutbox
 
+from apps.core.choices import EmailOutboxStatus
+
 
 def create_mailbox_message(user, subject, body):
     return MailboxMessage.objects.create(
@@ -17,16 +19,14 @@ def queue_email(
     recipient,
     email_type,
     payload=None,
-    purchase=None,
 ):
     return EmailOutbox.objects.get_or_create(
         idempotency_key=idempotency_key,
         defaults={
             "recipient": recipient,
-            "purchase": purchase,
             "email_type": email_type,
             "payload": payload or {},
-            "status": "pending",
+            "status": EmailOutboxStatus.PENDING,
             "next_attempt_at": timezone.now(),
         },
     )
