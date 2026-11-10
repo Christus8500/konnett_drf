@@ -54,7 +54,6 @@ from apps.konnett_points.notifications import (
     create_point_purchase_successful_notification,
     create_point_purchase_failed_notification,
     create_withdrawal_request_received_notification,
-    send_withdrawal_email,
     queue_withdrawal_email,
 )
 
@@ -355,9 +354,9 @@ class WithdrawalRequestListCreateView(
 
     def get_permissions(self):
         if self.request.method == "POST":
-            return [IsVerifiedProvider()]
+            return [IsVerifiedProvider() | IsCustomer()]
 
-        return [(IsAdminUser | IsVerifiedProvider)()]
+        return [IsAuthenticated()]
 
     # get method handles the listing of withdrawal requests
     def get(self, request, *args, **kwargs):
@@ -368,13 +367,13 @@ class WithdrawalRequestListCreateView(
         return self.create(request, *args, **kwargs)
 
     # create method handles the creation of a new withdrawal request,
-    # ensuring that the provider has enough available points and meets the minimum withdrawal requirement.
+    # ensuring that the user has enough available points and meets the minimum withdrawal requirement.
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        provider = request.user.provider_profile
+        user = request.user
 
         minimum_withdraw_points = MINIMUM_WITHDRAW_POINTS
         points_to_withdraw = serializer.validated_data["points"]
@@ -384,7 +383,7 @@ class WithdrawalRequestListCreateView(
                 {"points": f"Minimum points to withdraw is {minimum_withdraw_points}."}
             )
 
-        wallet = PointWallet.objects.select_for_update().get(user=request.user)
+        wallet = PointWallet.objects.select_for_update().get(user=user)
 
         if wallet.available_points < points_to_withdraw:
             raise ValidationError({"points": "Insufficient available points."})
@@ -395,7 +394,7 @@ class WithdrawalRequestListCreateView(
         )
 
         withdrawal = serializer.save(
-            provider=provider,
+            user=user,
             withdrawal_reference=generate_reference(WITHDRAWAL_REFERENCE_PREFIX),
         )
 
@@ -410,7 +409,7 @@ class WithdrawalRequestListCreateView(
         # Notify the provider
         transaction.on_commit(
             lambda: create_withdrawal_request_received_notification(
-                user=request.user, points_to_withdraw=points_to_withdraw
+                user=user, points_to_withdraw=points_to_withdraw
             )
         )
 
@@ -423,9 +422,9 @@ class WithdrawalRequestListCreateView(
         if request.user.is_staff:
             cache_key = f"withdrawal_requests:admin:pending:{request.GET.urlencode()}"
         else:
-            provider_id = request.user.provider_profile.id
+            user_id = request.user.id
             cache_key = (
-                f"withdrawal_requests:provider:{provider_id}:{request.GET.urlencode()}"
+                f"withdrawal_requests:user:{user_id}:{request.GET.urlencode()}"
             )
 
         cached_data = get_cache(cache_key)
@@ -444,16 +443,16 @@ class WithdrawalRequestListCreateView(
     # If the user is a provider, it returns only their own withdrawal requests.
     def get_queryset(self):
         queryset = self.queryset.select_related(
-            "provider__user",
+            "user",
             "processed_by",
         )
 
         if self.request.user.is_staff:
             return queryset.filter(status=WithdrawalStatus.PENDING)
 
-        if self.request.user.role == UserRole.PROVIDER:
+        if self.request.user.role == UserRole.PROVIDER | UserRole.CUSTOMER:
             return queryset.filter(
-                provider=self.request.user.provider_profile
+                user=self.request.user
             ).order_by("-created_at")
 
         return queryset.none()
@@ -464,7 +463,7 @@ class WithdrawalRequestListCreateView(
         return [ScopedRateThrottle()]
 
 
-# WithdrawalRequestRetrieveView retrieves a specific withdrawal request based on the provided ID.
+# WithdrawalRequestRetrieveView retrieves a specific withdrawal request based on the user ID.
 # Admins can retrieve any withdrawal request, while providers can only retrieve their own requests.
 class WithdrawalRequestRetrieveView(
     mixins.RetrieveModelMixin,
@@ -481,15 +480,15 @@ class WithdrawalRequestRetrieveView(
 
     def get_queryset(self):
         queryset = self.queryset.select_related(
-            "provider__user",
+            "user",
             "processed_by",
         )
 
         if self.request.user.is_staff:
             return queryset
 
-        if self.request.user.role == UserRole.PROVIDER:
-            return queryset.filter(provider=self.request.user.provider_profile)
+        if self.request.user.role == UserRole.PROVIDER | UserRole.CUSTOMER:
+            return queryset.filter(user=self.request.user)
 
         return queryset.none()
 
@@ -506,7 +505,7 @@ class WithdrawalApproveView(generics.UpdateAPIView):
         # Lock the withdrawal request for update to prevent race conditions during approval.
         withdrawal = get_object_or_404(
             WithdrawalRequest.objects.select_for_update(of=("self",)).select_related(
-                "provider__user"
+                "user"
             ),
             pk=kwargs["pk"],
         )
@@ -519,19 +518,19 @@ class WithdrawalApproveView(generics.UpdateAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Lock the provider's PointWallet for update
+        # Lock the user's PointWallet for update
         # to ensure that the available points are accurately checked and updated during the approval process.
         wallet = PointWallet.objects.select_for_update().get(
-            user=withdrawal.provider.user
+            user=withdrawal.user
         )
 
-        # If the provider does not have enough locked points for the withdrawal,
-        # return a 400 response indicating that the provider does not have enough locked points for this
+        # If the user does not have enough locked points for the withdrawal,
+        # return a 400 response indicating that the user does not have enough locked points for this
         if wallet.locked_points < withdrawal.points:
             return Response(
                 {
                     "detail": (
-                        "The provider does not have enough "
+                        "The User does not have enough "
                         "locked points for this withdrawal."
                     )
                 },
@@ -589,7 +588,7 @@ class WithdrawalRejectView(generics.UpdateAPIView):
 
         withdrawal = get_object_or_404(
             WithdrawalRequest.objects.select_for_update(of=("self",)).select_related(
-                "provider__user"
+                "user"
             ),
             pk=kwargs["pk"],
         )
@@ -601,21 +600,21 @@ class WithdrawalRejectView(generics.UpdateAPIView):
             )
 
         wallet = PointWallet.objects.select_for_update().get(
-            user=withdrawal.provider.user
+            user=withdrawal.user
         )
 
         if wallet.locked_points < withdrawal.points:
             return Response(
                 {
                     "detail": (
-                        "The provider does not have enough "
+                        "The User does not have enough "
                         "locked points for this withdrawal."
                     )
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Return the points to the provider.
+        # Return the points to the user.
         #
         # locked_points -> available_points
         unlock_points(
@@ -675,7 +674,7 @@ class ApprovedWithdrawalRequestPaidView(generics.UpdateAPIView):
         approved_withdrawal = get_object_or_404(
             ApprovedWithdrawalRequest.objects.select_for_update(
                 of=("self",)
-            ).select_related("withdrawal__provider__user"),
+            ).select_related("withdrawal__user"),
             pk=kwargs["pk"],
         )
 

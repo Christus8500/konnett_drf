@@ -13,10 +13,15 @@ from apps.core.choices import ProviderVerificationStatus
 # Serializer for the ProviderProfile model, handling serialization and deserialization of provider profile data.
 class ProviderProfileSerializer(serializers.ModelSerializer):
     user_id = serializers.UUIDField(source="user.id", required=False, read_only=True)
-    phone_number = serializers.CharField(source="user.phone_number", required=False)
     email = serializers.EmailField(source="user.email", required=False)
+    email_verified = serializers.BooleanField(source="user.email_verified", required=False)
+    phone_number = serializers.CharField(source="user.phone_number", required=False)
     first_name = serializers.CharField(source="user.first_name", required=False)
     last_name = serializers.CharField(source="user.last_name", required=False)
+
+    account_number = serializers.CharField(source="user.account_number", required=False)
+    account_name = serializers.CharField(source="user.account_name", required=False)
+    bank_name = serializers.CharField(source="user.bank_name", required=False)
 
     profile_image = serializers.ImageField(
         validators=[validate_image],
@@ -55,10 +60,14 @@ class ProviderProfileSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "user_id",
-            "phone_number",
-            "email",
             "first_name",
             "last_name",
+            "email",
+            "email_verified",
+            "phone_number",
+            "account_number",
+            "account_name",
+            "bank_name",
             "business_name",
             "is_available",
             "bio",
@@ -73,9 +82,6 @@ class ProviderProfileSerializer(serializers.ModelSerializer):
             "state",
             "latitude",
             "longitude",
-            "account_number",
-            "account_name",
-            "bank_name",
             "created_at",
             "updated_at",
         ]
@@ -83,6 +89,7 @@ class ProviderProfileSerializer(serializers.ModelSerializer):
             "id",
             "user_id",
             "email",
+            "email_verified",
             "is_verified",
             "average_rating",
             "ratings_count",

@@ -22,7 +22,7 @@ def withdrawal_request_saved(sender, instance, **kwargs):
         )
 
     def clear_cache():
-        cache.delete_pattern(f"*withdrawal_requests:provider:{instance.provider_id}*")
+        cache.delete_pattern(f"*withdrawal_requests:user:{instance.user_id}*")
         cache.delete_pattern("*withdrawal_requests:admin:pending*")
 
     transaction.on_commit(clear_cache)

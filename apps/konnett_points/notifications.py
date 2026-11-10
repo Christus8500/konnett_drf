@@ -61,7 +61,11 @@ def create_withdrawal_request_received_notification(user, points_to_withdraw):
         body=(
             f"Hi {user.first_name},\n\n"
             f"We have received your request to withdraw {points_to_withdraw} points.\n\n"
-            f"Our team is reviewing the request, we will contact you on any updates."
+            f"Our team is reviewing the request, we will contact you on any updates.\n\n"
+            "Withdrawal Bank Details:\n\n"
+            f"Account Number: {user.account_number}\n"
+            f"Account Name: {user.account_name}\n"
+            f"Bank Name: {user.bank_name}\n"
         ),
     )
 
@@ -145,6 +149,10 @@ def send_withdrawal_email(user, withdrawal, status, reject_reason=None):
             f"Your withdrawal request #{reference} of {points} points "
             "was approved successfully.",
             "Your bank will be credited in time.",
+            "Withdrawal Bank Details:",
+            f"Account Number: {user.account_number}",
+            f"Account Name: {user.account_name}",
+            f"Bank Name: {user.bank_name}",
         ]
     elif status == WithdrawalStatus.REJECTED:
         subject = "Withdrawal Request Rejected"
@@ -159,6 +167,10 @@ def send_withdrawal_email(user, withdrawal, status, reject_reason=None):
             f"Your withdrawal request #{reference} of {points} points "
             "was successful.",
             "Payment has been made to your bank.",
+            "Withdrawal Bank Details:",
+            f"Account Number: {user.account_number}",
+            f"Account Name: {user.account_name}",
+            f"Bank Name: {user.bank_name}",
         ]
     else:
         raise ValueError(f"Unsupported withdrawal status: {status}")
@@ -181,7 +193,7 @@ def queue_withdrawal_email(withdrawal, status, reject_reason=None):
 
     email, _ = queue_email(
         idempotency_key=f"withdrawal-{status}:{withdrawal.pk}",
-        recipient=withdrawal.provider.user.email,
+        recipient=withdrawal.user.email,
         email_type="withdrawal_status",
         payload={
             "withdrawal_pk": str(withdrawal.pk),  # UUID is not JSON serializable

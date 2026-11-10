@@ -54,11 +54,11 @@ def send_outbox_email(email):
         )
 
     elif email.email_type == "withdrawal_status":
-        withdrawal = WithdrawalRequest.objects.select_related("provider__user").get(
+        withdrawal = WithdrawalRequest.objects.select_related("user").get(
             pk=email.payload["withdrawal_pk"]
         )
         send_withdrawal_email(
-            user=withdrawal.provider.user,
+            user=withdrawal.user,
             withdrawal=withdrawal,
             status=email.payload["status"],
             reject_reason=email.payload.get("reject_reason") or None,

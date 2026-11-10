@@ -48,14 +48,6 @@ class ProviderProfile(UUIDModel, TimeStampedModel):
         blank=True,
     )
 
-    account_number = models.CharField(
-        max_length=10, blank=True, null=True, default="0000000000"
-    )
-    account_name = models.CharField(
-        max_length=255, blank=True, null=True, default="N/A"
-    )
-    bank_name = models.CharField(max_length=255, blank=True, null=True, default="N/A")
-
     # property method to get the full name of the customer by combining first and last names from the linked user instance.
     @property
     def fullname(self):

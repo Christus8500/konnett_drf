@@ -25,6 +25,14 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel, UUIDModel):
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
 
+    account_number = models.CharField(
+        max_length=10, blank=True, null=True, default="0000000000"
+    )
+    account_name = models.CharField(
+        max_length=255, blank=True, null=True, default="N/A"
+    )
+    bank_name = models.CharField(max_length=255, blank=True, null=True, default="N/A")
+
     # Custom user manager for handling user creation and superuser creation
     objects = UserManager()
 

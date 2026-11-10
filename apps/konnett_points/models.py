@@ -75,10 +75,10 @@ class PointPurchase(UUIDModel, TimeStampedModel):
         return f"{self.customer.fullname} bought {self.points} points"
 
 
-# WithdrawalRequest model represents a request by a provider to withdraw points from their PointWallet.
+# WithdrawalRequest model represents a request by a user to withdraw points from their PointWallet.
 class WithdrawalRequest(UUIDModel, TimeStampedModel):
-    provider = models.ForeignKey(
-        "providers.ProviderProfile",
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         related_name="withdrawal_requests",
     )
@@ -108,7 +108,7 @@ class WithdrawalRequest(UUIDModel, TimeStampedModel):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.provider} requested {self.points}points withdrawal"
+        return f"{self.user} requested {self.points}points withdrawal"
 
 
 class ApprovedWithdrawalRequest(UUIDModel):

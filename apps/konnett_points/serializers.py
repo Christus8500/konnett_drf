@@ -1,6 +1,8 @@
 from decimal import Decimal
 from uuid import UUID
 
+from django.contrib.auth import get_user_model
+
 from rest_framework import serializers
 
 from apps.konnett_points.models import (
@@ -11,7 +13,7 @@ from apps.konnett_points.models import (
     ApprovedWithdrawalRequest,
 )
 
-from apps.providers.models import ProviderProfile
+User = get_user_model()
 
 
 # UserPointWalletSerializer serializes the PointWallet model,
@@ -114,32 +116,33 @@ class PointTransactionSerializer(serializers.ModelSerializer):
 # WithdrawalRequestSerializer serializes the WithdrawalRequest model,
 # including provider details and processed information.
 class WithdrawalRequestSerializer(serializers.ModelSerializer):
-    class ProviderInfoSerializer(serializers.ModelSerializer):
-        provider_email = serializers.CharField(source="user.email", read_only=True)
-        provider_phone_number = serializers.CharField(
-            source="user.phone_number", read_only=True
-        )
+
+    class UserInfoSerializer(serializers.ModelSerializer):
+        fullname = serializers.SerializerMethodField()
 
         class Meta:
-            model = ProviderProfile
+            model = User
             fields = [
-                "business_name",
-                "provider_email",
-                "provider_phone_number",
-                "profile_image",
+                "fullname",
+                "email",
+                "phone_number",
+                "role",
                 "account_number",
                 "account_name",
                 "bank_name",
             ]
 
-    provider = ProviderInfoSerializer(read_only=True)
+        def get_fullname(self, obj):
+            return f"{obj.first_name} {obj.last_name}".strip()
+
+    user = UserInfoSerializer(read_only=True)
     processed_by = serializers.StringRelatedField(read_only=True)
 
     class Meta:
         model = WithdrawalRequest
         fields = [
             "id",
-            "provider",
+            "user",
             "points",
             "withdrawal_reference",
             "status",
@@ -150,7 +153,7 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
-            "provider",
+            "user",
             "withdrawal_reference",
             "status",
             "reject_reason",
@@ -158,6 +161,7 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
             "processed_by",
             "processed_at",
         ]
+
 
 class WithdrawalRejectSerializer(serializers.Serializer):
     reject_reason = serializers.CharField(max_length=1000)
