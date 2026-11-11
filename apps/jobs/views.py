@@ -1,7 +1,7 @@
 from functools import partial
 
 from django.db import transaction
-from django.db.models import F, Q, Prefetch, Avg
+from django.db.models import F, Q, Count, Prefetch, Avg
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 
@@ -10,7 +10,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets, generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAdminUser
+from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.exceptions import ValidationError
@@ -22,7 +22,12 @@ from rest_framework.throttling import (
 
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 
-from apps.core.permissions import IsCustomer, IsCustomerOwner, IsVerifiedProvider
+from apps.core.permissions import (
+    IsCustomer,
+    IsCustomerOwner,
+    IsProvider,
+    IsVerifiedProvider,
+)
 from apps.core.choices import (
     JobRequestStatus,
     JobOfferStatus,
@@ -52,6 +57,7 @@ from apps.jobs.serializers import (
     JobRequestOfferSerializer,
     JobDisputeSerializer,
     AdminJobDisputeSerializer,
+    ProviderRatingSerializer,
 )
 from apps.jobs.filters import JobFilter
 from apps.jobs.notifications import (
@@ -79,6 +85,8 @@ from apps.konnett_points.utils import (
 )
 
 from apps.mails.services import create_mailbox_message
+
+from apps.providers.models import ProviderProfile
 
 # Create your views here.
 
@@ -754,7 +762,7 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
     throttle_scope = "job_completion"
 
     @extend_schema(
-        request=None,
+        request=JobConfirmCompletionSerializer,
         responses={
             200: OpenApiResponse(description="Job completed successfully."),
         },
@@ -770,6 +778,8 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
 
         serializer = JobConfirmCompletionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        rating_value = serializer.validated_data["rating"]
+        comment = serializer.validated_data.get("comment", "")
 
         offer = get_object_or_404(
             JobRequestOffer.objects.select_related("provider__user"),
@@ -777,29 +787,30 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
             status=JobOfferStatus.ACCEPTED,
         )
 
-        provider = offer.provider
+        # Lock the provider row so concurrent ratings can't overwrite each other's stats.
+        provider = (
+            ProviderProfile.objects.select_for_update(of=("self",))
+            .select_related("user")
+            .get(pk=offer.provider_id)
+        )
 
         # Create the rating for this completed job.
         ProviderRating.objects.create(
             job=job,
             provider=provider,
             customer=job.customer,
-            rating=serializer.validated_data["rating"],
+            rating=rating_value,
+            comment=comment,
         )
 
         # Recalculate the provider's average rating.
-        average_rating = (
-            ProviderRating.objects.filter(provider=provider).aggregate(
-                average=Avg("rating")
-            )["average"]
-            or 0
+        stats = ProviderRating.objects.filter(provider=provider).aggregate(
+            average=Avg("rating"), count=Count("id")
         )
 
         # Update provider rating statistics.
-        provider.average_rating = average_rating
-        provider.ratings_count = ProviderRating.objects.filter(
-            provider=provider
-        ).count()
+        provider.average_rating = round(stats["average"] or 0, 2)
+        provider.ratings_count = stats["count"]
         provider.completed_jobs = F("completed_jobs") + 1
         provider.save(
             update_fields=[
@@ -808,9 +819,11 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
                 "completed_jobs",
             ]
         )
+        # completed_jobs is now an F() expression in memory. Call
+        # provider.refresh_from_db(fields=["completed_jobs"]) before reading it.
 
+        # JobRequest.save() sets completed_at when the status becomes COMPLETED.
         job.status = JobRequestStatus.COMPLETED
-        job.completed_at = timezone.now()
         job.save(update_fields=["status", "completed_at"])
 
         pay_provider(job, offer)
@@ -826,12 +839,37 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
         return Response(
             {
                 "detail": "Job completed successfully.",
-                "rating": serializer.validated_data["rating"],
-                "provider_average_rating": provider.average_rating,
+                "rating": rating_value,
+                "comment": comment,
+                "provider_average_rating": float(provider.average_rating),
                 "provider_ratings_count": provider.ratings_count,
             },
             status=status.HTTP_200_OK,
         )
+
+
+class MyRatingsListView(generics.ListAPIView):
+    """Comments left for the logged-in provider."""
+
+    serializer_class = ProviderRatingSerializer
+    permission_classes = [IsProvider]
+
+    def get_queryset(self):
+        return ProviderRating.objects.filter(
+            provider=self.request.user.provider_profile, is_visible=True
+        ).exclude(comment="")
+
+
+class ProviderRatingsPublicListView(generics.ListAPIView):
+    """Comments left for a given provider, for customers browsing."""
+
+    serializer_class = ProviderRatingSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return ProviderRating.objects.filter(
+            provider_id=self.kwargs["provider_id"], is_visible=True
+        ).exclude(comment="")
 
 
 class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
@@ -867,7 +905,7 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
         )
 
         # Check if a dispute already exists for this job.
-        if hasattr(job, "dispute"):
+        if JobDispute.objects.filter(job=job).exists():
             return Response(
                 {"detail": "A dispute already exists for this job."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -875,7 +913,6 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
         serializer.save(job=job)
 
         # Mark the job as disputed.
@@ -883,24 +920,17 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
         job.save(update_fields=["status"])
 
         # Notify the provider after the transaction commits.
+        provider_user = accepted_offer.provider.user
         transaction.on_commit(
-            lambda: create_dispute_opened_notification(
-                user=accepted_offer.provider.user,
-                job=job,
-            )
+            lambda: create_dispute_opened_notification(user=provider_user, job=job)
         )
 
         # Notify administrators after the transaction commits.
-        admin_users = User.objects.filter(
-            role=UserRole.ADMIN,
-            is_active=True,
-        )
-
+        admin_users = list(User.objects.filter(role=UserRole.ADMIN, is_active=True))
         for admin in admin_users:
             transaction.on_commit(
                 lambda user=admin: create_dispute_opened_admin_notification(
-                    user=user,
-                    job=job,
+                    user=user, job=job
                 )
             )
 
@@ -994,6 +1024,8 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
 
             offer.provider.completed_jobs = F("completed_jobs") + 1
             offer.provider.save(update_fields=["completed_jobs"])
+            # Call offer.provider.refresh_from_db(fields=["completed_jobs"]) first,
+            # if you need the value of completed_jobs immediately after saving.
 
             transaction.on_commit(
                 lambda: create_dispute_released_customer_notification(

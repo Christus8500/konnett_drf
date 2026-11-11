@@ -7,6 +7,8 @@ from apps.providers.views import (
     update_provider_verification_status,
 )
 
+from apps.jobs.views import MyRatingsListView, ProviderRatingsPublicListView
+
 urlpatterns = [
     path("profile/", ProviderProfileView.as_view(), name="provider_profile"),
     path(
@@ -23,5 +25,11 @@ urlpatterns = [
         "verification/<uuid:provider_id>/update_status/",
         update_provider_verification_status,
         name="update-provider-verification-status",
+    ),
+    path("ratings/me/", MyRatingsListView.as_view(), name="my-ratings"),
+    path(
+        "<uuid:provider_id>/ratings/",
+        ProviderRatingsPublicListView.as_view(),
+        name="provider-ratings",
     ),
 ]

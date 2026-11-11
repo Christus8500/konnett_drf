@@ -5,6 +5,9 @@ from django.contrib.auth import get_user_model
 
 from rest_framework import serializers
 
+from apps.core.constants import MINIMUM_WITHDRAW_POINTS
+from apps.core.utils import mask_account_number
+
 from apps.konnett_points.models import (
     PointWallet,
     PointPurchase,
@@ -113,54 +116,76 @@ class PointTransactionSerializer(serializers.ModelSerializer):
         return obj.withdrawal_request_id
 
 
-# WithdrawalRequestSerializer serializes the WithdrawalRequest model,
-# including provider details and processed information.
 class WithdrawalRequestSerializer(serializers.ModelSerializer):
+    """For the person who made the request. Account number is masked."""
 
-    class UserInfoSerializer(serializers.ModelSerializer):
-        fullname = serializers.SerializerMethodField()
+    account_number = serializers.SerializerMethodField()
 
-        class Meta:
-            model = User
-            fields = [
-                "fullname",
-                "email",
-                "phone_number",
-                "role",
-                "account_number",
-                "account_name",
-                "bank_name",
-            ]
+    class Meta:
+        model = WithdrawalRequest
+        fields = [
+            "id",
+            "points",
+            "withdrawal_reference",
+            "status",
+            "account_number",
+            "account_name",
+            "bank_name",
+            "reject_reason",
+            "created_at",
+            "processed_at",
+        ]
+        read_only_fields = [
+            "id",
+            "withdrawal_reference",
+            "status",
+            "account_name",
+            "bank_name",
+            "reject_reason",
+            "created_at",
+            "processed_at",
+        ]
 
-        def get_fullname(self, obj):
-            return f"{obj.first_name} {obj.last_name}".strip()
+    def get_account_number(self, obj) -> str:
+        return mask_account_number(obj.account_number)
 
-    user = UserInfoSerializer(read_only=True)
+    def validate_points(self, value):
+        if value < MINIMUM_WITHDRAW_POINTS:
+            raise serializers.ValidationError(
+                f"Minimum points to withdraw is {MINIMUM_WITHDRAW_POINTS}."
+            )
+        return value
+
+
+class AdminWithdrawalRequestSerializer(serializers.ModelSerializer):
+    """For admins paying out: full bank details from the request's snapshot."""
+
+    user_fullname = serializers.CharField(source="user.full_name", read_only=True)
+    user_email = serializers.EmailField(source="user.email", read_only=True)
+    user_phone_number = serializers.CharField(source="user.phone_number", read_only=True)
+    user_role = serializers.CharField(source="user.role", read_only=True)
     processed_by = serializers.StringRelatedField(read_only=True)
 
     class Meta:
         model = WithdrawalRequest
         fields = [
             "id",
-            "user",
+            "user_fullname",
+            "user_email",
+            "user_phone_number",
+            "user_role",
             "points",
             "withdrawal_reference",
             "status",
+            "account_number",
+            "account_name",
+            "bank_name",
             "reject_reason",
             "created_at",
             "processed_by",
             "processed_at",
         ]
-        read_only_fields = [
-            "id",
-            "user",
-            "withdrawal_reference",
-            "status",
-            "reject_reason",
-            "created_at",
-            "processed_by",
-            "processed_at",
-        ]
+        read_only_fields = fields
 
 
 class WithdrawalRejectSerializer(serializers.Serializer):
@@ -168,10 +193,9 @@ class WithdrawalRejectSerializer(serializers.Serializer):
 
 
 class ApprovedWithdrawalRequestSerializer(serializers.ModelSerializer):
-    withdrawal = WithdrawalRequestSerializer(read_only=True)
+    withdrawal = AdminWithdrawalRequestSerializer(read_only=True)
 
     class Meta:
         model = ApprovedWithdrawalRequest
-        fields = [
-            "withdrawal",
-        ]
+        fields = ["id", "withdrawal", "paid", "paid_on"]
+        read_only_fields = fields

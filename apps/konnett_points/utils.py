@@ -1,5 +1,9 @@
-from decimal import Decimal
+import hashlib
+import hmac
 
+from decimal import ROUND_DOWN, Decimal
+
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -16,6 +20,53 @@ from apps.core.constants import (
 from apps.konnett_points.models import PointWallet, PointTransaction, PointPurchase
 
 
+
+def verify_webhook_signature(request):
+    """
+    HMAC-SHA512 of the raw body, compared in constant time.
+
+    The header name and scheme differ per provider. As far as I know, Paystack
+    sends this HMAC in `x-paystack-signature`, while Flutterwave sends a
+    `verif-hash` header that must equal the secret hash you set in the
+    dashboard (compare it directly with hmac.compare_digest). Confirm against
+    your provider's docs and use the matching variant.
+    """
+    secret = settings.PAYMENT_WEBHOOK_SECRET
+    received = request.headers.get(settings.PAYMENT_WEBHOOK_SIGNATURE_HEADER, "")
+    if not secret or not received:
+        return False
+
+    expected = hmac.new(secret.encode(), request.body, hashlib.sha512).hexdigest()
+    return hmac.compare_digest(received.encode(), expected.encode())
+
+
+def calculate_fee(points, rate=ADMIN_FEE_RATE):
+    fee = Decimal(points) * Decimal(str(rate))
+    return int(fee.to_integral_value(rounding=ROUND_DOWN))
+
+
+def lock_wallets(*user_ids):
+    wallets = (
+        PointWallet.objects.select_for_update()
+        .filter(user_id__in=user_ids)
+        .order_by("pk")
+    )
+    by_user = {w.user_id: w for w in wallets}
+    if len(by_user) != len(set(user_ids)):
+        raise ValidationError({"wallet": "A required wallet does not exist."})
+    return by_user
+
+SETTLED_TYPES = [
+    TransactionType.EARNED,
+    TransactionType.PROVIDER_PAY,
+    TransactionType.REFUND,
+]
+
+def ensure_unsettled(job):
+    if PointTransaction.objects.filter(
+        job=job, transaction_type__in=SETTLED_TYPES
+    ).exists():
+        raise ValidationError({"job": "This job's points have already been settled."})
 
 # ^ ################### WALLET HELPER FUNCTIONS ####################
 
@@ -257,20 +308,19 @@ def pay_provider(job, accepted_offer):
     Provider:
         available_points -> increased
     """
-    customer_wallet = PointWallet.objects.select_for_update().get(
-        user=job.customer.user
-    )
+    ensure_unsettled(job)
 
-    provider_wallet = PointWallet.objects.select_for_update().get(
-        user=accepted_offer.provider.user
-    )
+    customer_user_id = job.customer.user_id
+    provider_user_id = accepted_offer.provider.user_id
+    wallets = lock_wallets(customer_user_id, provider_user_id)
+    customer_wallet = wallets[customer_user_id]
+    provider_wallet = wallets[provider_user_id]
 
     job_points = job.points_amount
-
     if customer_wallet.locked_points < job_points:
         raise ValidationError({"locked_points": "Insufficient locked points."})
 
-    admin_fee_points = int(job_points * ADMIN_FEE_RATE)
+    admin_fee_points = calculate_fee(job_points)
     provider_points = job_points - admin_fee_points
 
     # Remove the full amount from customer's locked balance
@@ -281,12 +331,13 @@ def pay_provider(job, accepted_offer):
     customer_wallet.save(update_fields=["locked_points"])
     provider_wallet.save(update_fields=["available_points"])
 
-    # Record the actual amount the provider earned
-    provider_transaction = create_point_transaction(
-        wallet=provider_wallet,
-        points=provider_points,
-        transaction_type=TransactionType.EARNED,
-        job=job,
+    provider_tx = create_point_transaction(
+        wallet=provider_wallet, points=provider_points,
+        transaction_type=TransactionType.EARNED, job=job,
+    )
+    customer_tx = create_point_transaction(
+        wallet=customer_wallet, points=job_points,
+        transaction_type=TransactionType.PROVIDER_PAY, job=job,
     )
 
     # Store the fee and provider earning on the job
@@ -300,15 +351,7 @@ def pay_provider(job, accepted_offer):
         ]
     )
 
-    # Record customer's payment
-    customer_transaction = create_point_transaction(
-        wallet=customer_wallet,
-        points=job_points,
-        transaction_type=TransactionType.PROVIDER_PAY,
-        job=job,
-    )
-
-    return customer_transaction, provider_transaction
+    return customer_tx, provider_tx
 
 
 @transaction.atomic

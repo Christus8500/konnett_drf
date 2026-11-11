@@ -1,12 +1,13 @@
 from django.db import transaction
+from django.core.validators import FileExtensionValidator
+from django.utils import timezone
 
 from rest_framework import serializers
 
 from apps.providers.models import ProviderProfile, ProviderVerification
 
-from apps.core.validators import validate_image
+from apps.core.validators import validate_file_size, validate_image
 from apps.core.models import Address
-from apps.core.serializers import AddressSerializer
 from apps.core.choices import ProviderVerificationStatus
 
 
@@ -14,7 +15,9 @@ from apps.core.choices import ProviderVerificationStatus
 class ProviderProfileSerializer(serializers.ModelSerializer):
     user_id = serializers.UUIDField(source="user.id", required=False, read_only=True)
     email = serializers.EmailField(source="user.email", required=False)
-    email_verified = serializers.BooleanField(source="user.email_verified", required=False)
+    email_verified = serializers.BooleanField(
+        source="user.email_verified", required=False
+    )
     phone_number = serializers.CharField(source="user.phone_number", required=False)
     first_name = serializers.CharField(source="user.first_name", required=False)
     last_name = serializers.CharField(source="user.last_name", required=False)
@@ -159,11 +162,16 @@ class ProviderProfileSerializer(serializers.ModelSerializer):
 
 # Serializer for the ProviderVerification model, handling serialization and deserialization of provider verification data.
 class ProviderVerificationSerializer(serializers.ModelSerializer):
-    provider_id = serializers.UUIDField(source="provider.id")
-    provider_name = serializers.CharField(source="provider.fullname")
-    provider_email = serializers.CharField(source="provider.user.email")
-    status = serializers.CharField(read_only=True)
-    selfie_image = serializers.ImageField(validators=[validate_image], required=False)
+    provider_id = serializers.UUIDField(read_only=True)
+    provider_name = serializers.CharField(source="provider.full_name", read_only=True)
+    provider_email = serializers.CharField(source="provider.user.email", read_only=True)
+    selfie_image = serializers.ImageField(
+        validators=[
+            validate_image,
+            FileExtensionValidator(["jpg", "jpeg", "png"]),
+        ],
+        required=False,
+    )
 
     class Meta:
         model = ProviderVerification
@@ -177,20 +185,24 @@ class ProviderVerificationSerializer(serializers.ModelSerializer):
             "status",
             "submitted_at",
         ]
-        read_only_fields = [
-            "id",
-            "provider_id",
-            "provider_name",
-            "provider_email",
-            "status",
-            "submitted_at",
-        ]
+        read_only_fields = ["id", "status", "submitted_at"]
+        extra_kwargs = {
+            "id_document": {
+                "required": False,
+                "validators": [
+                    validate_file_size,
+                    FileExtensionValidator(["pdf", "jpg", "jpeg", "png"]),
+                ],
+            },
+        }
 
-    # Overriding the serializer update method to prevent updates if the verification status is already approved.
-    # If the status is not approved, it sets the status to pending and saves the instance.
     def update(self, instance, validated_data):
         if instance.status == ProviderVerificationStatus.VERIFIED:
             raise serializers.ValidationError("Verification has already been approved.")
-        instance.status = ProviderVerificationStatus.PENDING
-        instance.save(update_fields=["status"])
+
+        # Only treat the request as a (re)submission if a file was actually uploaded
+        if "id_document" in validated_data or "selfie_image" in validated_data:
+            validated_data["status"] = ProviderVerificationStatus.PENDING
+            validated_data["submitted_at"] = timezone.now()
+
         return super().update(instance, validated_data)

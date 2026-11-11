@@ -1,14 +1,12 @@
-from django.db import transaction
 from html import escape
 
-from apps.mails.services import create_mailbox_message
+from django.db import transaction
 
-from apps.core.utils import send_email
+from apps.core.utils import send_email, mask_account_number
 from apps.core.choices import WithdrawalStatus
 from apps.core.constants import ADMIN_FEE_RATE_PERCENT
 
-from apps.mails.tasks import process_email_outbox
-from apps.mails.services import queue_email
+from apps.mails.services import create_mailbox_message, queue_email
 
 
 def create_point_purchase_initiated_notification(user, purchase):
@@ -54,18 +52,28 @@ def create_point_purchase_successful_notification(user, purchase):
     )
 
 
-def create_withdrawal_request_received_notification(user, points_to_withdraw):
+def _bank_details_lines(withdrawal):
+    # Always read the snapshot taken at request time, never the live User
+    return [
+        f"Account Number: {mask_account_number(withdrawal.account_number)}",
+        f"Account Name: {withdrawal.account_name}",
+        f"Bank Name: {withdrawal.bank_name}",
+    ]
+
+
+def create_withdrawal_request_received_notification(user, withdrawal):
     return create_mailbox_message(
         user=user,
         subject="Withdrawal Request Received",
         body=(
             f"Hi {user.first_name},\n\n"
-            f"We have received your request to withdraw {points_to_withdraw} points.\n\n"
-            f"Our team is reviewing the request, we will contact you on any updates.\n\n"
-            "Withdrawal Bank Details:\n\n"
-            f"Account Number: {user.account_number}\n"
-            f"Account Name: {user.account_name}\n"
-            f"Bank Name: {user.bank_name}\n"
+            f"We have received your request #{withdrawal.withdrawal_reference} "
+            f"to withdraw {withdrawal.points} points.\n\n"
+            "Our team is reviewing the request, we will contact you on any updates.\n\n"
+            "Payment will be made to:\n\n"
+            + "\n".join(_bank_details_lines(withdrawal))
+            + "\n\nIf these details are wrong, contact support before the "
+            "request is approved.\n\nThanks."
         ),
     )
 
@@ -150,27 +158,22 @@ def send_withdrawal_email(user, withdrawal, status, reject_reason=None):
             "was approved successfully.",
             "Your bank will be credited in time.",
             "Withdrawal Bank Details:",
-            f"Account Number: {user.account_number}",
-            f"Account Name: {user.account_name}",
-            f"Bank Name: {user.bank_name}",
+            *_bank_details_lines(withdrawal),
         ]
     elif status == WithdrawalStatus.REJECTED:
         subject = "Withdrawal Request Rejected"
         lines = [
-            f"Your withdrawal request #{reference} of {points} points " "was rejected.",
+            f"Your withdrawal request #{reference} of {points} points was rejected.",
             "The reason is:",
             str(reject_reason) if reject_reason else "No reason was provided.",
         ]
     elif status == WithdrawalStatus.PAID:
         subject = "Withdrawal Request Processed"
         lines = [
-            f"Your withdrawal request #{reference} of {points} points "
-            "was successful.",
+            f"Your withdrawal request #{reference} of {points} points was successful.",
             "Payment has been made to your bank.",
             "Withdrawal Bank Details:",
-            f"Account Number: {user.account_number}",
-            f"Account Name: {user.account_name}",
-            f"Bank Name: {user.bank_name}",
+            *_bank_details_lines(withdrawal),
         ]
     else:
         raise ValueError(f"Unsupported withdrawal status: {status}")
@@ -189,6 +192,8 @@ def send_withdrawal_email(user, withdrawal, status, reject_reason=None):
 
 
 def queue_withdrawal_email(withdrawal, status, reject_reason=None):
+    from apps.mails.tasks import process_email_outbox  # avoids a circular import
+
     status = str(status)
 
     email, _ = queue_email(
@@ -196,10 +201,10 @@ def queue_withdrawal_email(withdrawal, status, reject_reason=None):
         recipient=withdrawal.user.email,
         email_type="withdrawal_status",
         payload={
-            "withdrawal_pk": str(withdrawal.pk),  # UUID is not JSON serializable
+            "withdrawal_pk": str(withdrawal.pk),
             "status": status,
             "reject_reason": reject_reason or "",
         },
     )
 
-    transaction.on_commit(lambda: process_email_outbox.delay(email.pk))
+    transaction.on_commit(lambda: process_email_outbox.delay(email.pk), robust=True)

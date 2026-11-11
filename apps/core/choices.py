@@ -10,6 +10,7 @@ class UserRole(models.TextChoices):
 
 # Choices for provider verification status
 class ProviderVerificationStatus(models.TextChoices):
+    NOT_SUBMITTED = "not_submitted", "Not submitted"
     PENDING = "pending", "Pending"
     VERIFIED = "verified", "Verified"
     REJECTED = "rejected", "Rejected"

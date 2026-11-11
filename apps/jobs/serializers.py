@@ -1,3 +1,6 @@
+import hashlib
+
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -19,6 +22,7 @@ from apps.jobs.models import (
     JobCompletionImage,
     JobRequestOffer,
     JobDispute,
+    ProviderRating,
 )
 
 
@@ -35,6 +39,26 @@ class JobRequestImageSerializer(serializers.ModelSerializer):
 
 class JobConfirmCompletionSerializer(serializers.Serializer):
     rating = serializers.IntegerField(min_value=1, max_value=5)
+    comment = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=1000,
+    )
+
+
+class ProviderRatingSerializer(serializers.ModelSerializer):
+    reviewer = serializers.SerializerMethodField()
+    # Month and year only, so a provider can't match a comment to a specific job by timing
+    created_at = serializers.DateTimeField(format="%B %Y", read_only=True)
+
+    class Meta:
+        model = ProviderRating
+        fields = ["id", "rating", "comment", "reviewer", "created_at"]
+        read_only_fields = fields
+
+    def get_reviewer(self, obj):
+        raw = f"{settings.REVIEWER_LABEL_SALT}:{obj.customer_id}:{obj.provider_id}"
+        return f"user{hashlib.sha256(raw.encode()).hexdigest()[:4]}..."
 
 
 class JobCompletionImageSerializer(serializers.Serializer):
@@ -49,6 +73,7 @@ class JobRequestOfferSerializer(serializers.ModelSerializer):
         class Meta:
             model = ProviderProfile
             fields = [
+                "id",
                 "business_name",
                 "years_of_experience",
                 "average_rating",

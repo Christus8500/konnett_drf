@@ -8,7 +8,7 @@ class ProviderProfileAdmin(admin.ModelAdmin):
     list_display = ("fullname", "is_verified", "is_available")
     search_fields = ("user__email", "fullname")
     list_filter = ("is_verified",)
-    readonly_fields = ("user", "business_name", "bio", "years_of_experience", "average_rating", "completed_jobs", "profile_image", "account_number", "account_name", "bank_name")
+    readonly_fields = ("user", "business_name", "bio", "years_of_experience", "average_rating", "completed_jobs", "profile_image",)
 
 
 @admin.register(ProviderVerification)

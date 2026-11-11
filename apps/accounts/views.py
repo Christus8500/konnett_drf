@@ -1,14 +1,19 @@
+import hashlib
+import time
+
 from django.conf import settings
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 from rest_framework import mixins, viewsets, generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
+from rest_framework.throttling import ScopedRateThrottle
 
 from drf_spectacular.utils import extend_schema
 
@@ -19,6 +24,10 @@ from apps.accounts.serializers import (
     RegisterSerializer,
     LoginSerializer,
     UserSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetConfirmSerializer,
+    EmailChangeRequestSerializer,
+    EmailChangeConfirmSerializer,
 )
 from apps.accounts.models import User
 
@@ -27,6 +36,21 @@ from apps.mails.tasks import process_email_outbox
 
 
 # Create your views here.
+def _queue_password_reset(user):
+    # Time bucket: repeated requests within 5 minutes collapse into one email,
+    # while a later request is allowed to send a fresh one.
+    bucket = int(time.time() // 300)
+    outbox_email, _ = queue_email(
+        idempotency_key=f"password-reset:{user.pk}:{bucket}",
+        recipient=user.email,
+        email_type="password_reset",
+        payload={"user_id": str(user.pk)},
+    )
+    transaction.on_commit(
+        lambda email_id=outbox_email.pk: process_email_outbox.delay(email_id)
+    )
+
+
 # UserViewSet: A viewset that allows listing, retrieving, updating, and deleting user instances. Only accessible by admin users.
 class UserViewSet(
     mixins.ListModelMixin,
@@ -67,7 +91,7 @@ class RegisterView(generics.CreateAPIView):
         user = serializer.save()
 
         refresh = RefreshToken.for_user(user)
-        
+
         transaction.on_commit(
             lambda: create_mailbox_message(
                 user=user,
@@ -76,17 +100,16 @@ class RegisterView(generics.CreateAPIView):
             )
         )
 
-        # QUeue verification email after the transaction is committed 
+        # QUeue verification email after the transaction is committed
         email, _ = queue_email(
             idempotency_key=f"account-verification:{user.pk}",
             recipient=user.email,
             email_type="account_verification",
-            payload={"user_pk" : str(user.pk)},
+            payload={"user_pk": str(user.pk)},
         )
 
         transaction.on_commit(
-            lambda email_id=email.pk:
-            process_email_outbox.delay(email_id)
+            lambda email_id=email.pk: process_email_outbox.delay(email_id)
         )
 
         return Response(
@@ -178,6 +201,7 @@ class VerifyEmailView(APIView):
             TypeError,
             ValueError,
             OverflowError,
+            DjangoValidationError,
             User.DoesNotExist,
         ):
             return Response(
@@ -206,5 +230,136 @@ class VerifyEmailView(APIView):
 
         return Response(
             {"message": "Email verified successfully."},
+            status=status.HTTP_200_OK,
+        )
+
+
+# ---------- Password reset ----------
+class PasswordResetRequestView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_reset"
+
+    @extend_schema(request=PasswordResetRequestSerializer, responses={200: None})
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        email = serializer.validated_data["email"]
+        user = User.objects.filter(email__iexact=email, is_active=True).first()
+
+        if user:
+            _queue_password_reset(user)
+
+        # Same response whether or not the account exists, so emails can't be enumerated.
+        return Response(
+            {
+                "message": "If an account with that email exists, a reset link has been sent."
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class AuthenticatedPasswordResetView(APIView):
+    """Logged-in user asks for a reset link from settings. No email input needed."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_reset"
+
+    @extend_schema(request=None, responses={200: None})
+    def post(self, request):
+        _queue_password_reset(request.user)
+        return Response(
+            {"message": "A reset link was sent to your email address."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class PasswordResetConfirmView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_reset"
+
+    @extend_schema(request=PasswordResetConfirmSerializer, responses={200: None})
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+
+        # Optional: notify the user in their mailbox.
+        create_mailbox_message(
+            user=user,
+            subject="Password changed",
+            body="Your password was changed successfully.",
+        )
+
+        return Response(
+            {"message": "Password has been reset successfully."},
+            status=status.HTTP_200_OK,
+        )
+
+
+# ---------- Email change ----------
+class EmailChangeRequestView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "email_change"
+
+    @extend_schema(request=EmailChangeRequestSerializer, responses={200: None})
+    def post(self, request):
+        serializer = EmailChangeRequestSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        user = request.user
+        new_email = serializer.validated_data["new_email"]
+
+        bucket = int(time.time() // 300)
+        email_hash = hashlib.sha256(new_email.lower().encode()).hexdigest()[:16]
+        key_suffix = f"{user.pk}:{email_hash}:{bucket}"
+
+        with transaction.atomic():
+            confirm_mail, _ = queue_email(
+                idempotency_key=f"email-change:{key_suffix}",
+                recipient=new_email,
+                email_type="email_change",
+                payload={"user_id": str(user.pk), "new_email": new_email},
+            )
+            notice_mail, _ = queue_email(
+                idempotency_key=f"email-change-notice:{key_suffix}",
+                recipient=user.email,
+                email_type="email_change_notice",
+                payload={"user_id": str(user.pk), "new_email": new_email},
+            )
+            for mail_obj in (confirm_mail, notice_mail):
+                transaction.on_commit(
+                    lambda eid=mail_obj.pk: process_email_outbox.delay(eid)
+                )
+
+        return Response(
+            {"message": "A confirmation link was sent to your new email address."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class EmailChangeConfirmView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "email_change"
+
+    @extend_schema(request=EmailChangeConfirmSerializer, responses={200: None})
+    def post(self, request):
+        serializer = EmailChangeConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            serializer.save()
+        except IntegrityError:  # race with another signup using the same email
+            return Response(
+                {"error": "Email already exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(
+            {"message": "Email updated successfully."},
             status=status.HTTP_200_OK,
         )

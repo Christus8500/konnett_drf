@@ -1,7 +1,9 @@
 import os
+import uuid
 
-from django.db import models
 from django.conf import settings
+from django.core.validators import FileExtensionValidator
+from django.db import models
 
 from apps.core.models import UUIDModel, TimeStampedModel
 
@@ -10,8 +12,9 @@ from apps.core.models import UUIDModel, TimeStampedModel
 
 # Image upload function:: so that each customer will have their own profile image folder
 def profile_image_upload(instance, filename):
-    extension = os.path.splitext(filename)[1]
-    return f"customers/profile_images/{instance.user.id}/profile{extension}"
+    """Store each customer's images in their own folder, with a unique filename."""
+    extension = os.path.splitext(filename)[1].lower()
+    return f"customers/profile_images/{instance.user_id}/{uuid.uuid4().hex}{extension}"
 
 
 # CustomerProfile: A model representing the profile of a customer, linked to a user instance.
@@ -21,17 +24,23 @@ class CustomerProfile(UUIDModel, TimeStampedModel):
         on_delete=models.CASCADE,
         related_name="customer_profile",
     )
-    address = models.TextField(blank=True, null=True)
-    city = models.CharField(max_length=100, blank=True)
-    state = models.CharField(max_length=100, blank=True)
+    address = models.TextField(blank=True, default="")
+    city = models.CharField(max_length=100, blank=True, default="")
+    state = models.CharField(max_length=100, blank=True, default="")
     profile_image = models.ImageField(
-        upload_to=profile_image_upload, blank=True, null=True
+        upload_to=profile_image_upload,
+        blank=True,
+        validators=[FileExtensionValidator(["jpg", "jpeg", "png", "webp"])],
     )
 
-    # property method to get the full name of the customer by combining first and last names from the linked user instance.
+    class Meta:
+        verbose_name = "customer profile"
+        verbose_name_plural = "customer profiles"
+
+        
     @property
-    def fullname(self):
-        return f"{self.user.first_name} {self.user.last_name}".strip()
+    def full_name(self):
+        return self.user.full_name
 
     def __str__(self):
-        return self.fullname
+        return self.full_name or self.user.email

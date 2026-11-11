@@ -34,6 +34,7 @@ DEBUG = True
 ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "").split(",")
 
 BACKEND_URL = os.getenv("BACKEND_URL")
+FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 
 # Application definition
@@ -189,6 +190,11 @@ LOGGING = {
 }
 
 
+# -- WEBHOOK ---
+PAYMENT_WEBHOOK_SECRET = os.getenv("PAYMENT_WEBHOOK_SECRET")
+PAYMENT_WEBHOOK_SIGNATURE_HEADER = "x-signature"  # use your provider's header name
+
+
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 
@@ -234,6 +240,16 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+PASSWORD_RESET_TIMEOUT = 60 * 60 * 24
+# `PASSWORD_RESET_TIMEOUT` is global. Django's default is 3 days. 
+# 24 hours is a reasonable compromise because email verification link shares the same setting. 
+# Lowering it shortens verification links too.
+EMAIL_CHANGE_TIMEOUT = 60 * 60 * 24    # seconds; used by our own signed token
+
+# Dedicated salt, so rotating SECRET_KEY doesn't change every reviewer label.
+# Generate once, keep it in your environment, and don't change it afterwards.
+REVIEWER_LABEL_SALT = os.getenv("REVIEWER_LABEL_SALT")
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -250,6 +266,8 @@ REST_FRAMEWORK = {
         "disputes": "10/min",
         "withdrawals_create": "2/hour",
         "point_purchase": "5/min",
+        "password_reset": "5/hour",
+        "email_change": "5/hour",
     },
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_FILTER_BACKENDS": [

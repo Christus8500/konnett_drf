@@ -1,6 +1,8 @@
-import random
+import os
+import uuid
 import secrets
-import string
+import hashlib
+import time
 
 from email.utils import formataddr
 
@@ -120,3 +122,38 @@ def send_email(
         raise RuntimeError("Email backend reported 0 messages sent.")
 
     return sent
+
+
+def unique_filename(filename):
+    """Random filename that keeps the (lowercased) extension."""
+    extension = os.path.splitext(filename)[1].lower()
+    return f"{uuid.uuid4().hex}{extension}"
+
+
+
+def mask_account_number(account_number):
+    """'0123456789' -> '******6789'"""
+    if not account_number:
+        return ""
+    return "*" * max(len(account_number) - 4, 0) + account_number[-4:]
+
+
+def cache_version(scope, owner_id):
+    key = f"cache-ver:{scope}:{owner_id}"
+    version = cache.get(key)
+    if version is None:
+        version = time.time_ns()
+        cache.set(key, version, None)
+    return version
+
+
+def bump_cache_version(scope, owner_id):
+    """Makes every cached page for this scope/owner unreachable at once."""
+    cache.set(f"cache-ver:{scope}:{owner_id}", time.time_ns(), None)
+
+
+def versioned_cache_key(scope, owner_id, query_params):
+    # Hash the query string so user input never goes into a key directly
+    raw = repr(sorted((k, tuple(v)) for k, v in query_params.lists()))
+    digest = hashlib.sha256(raw.encode()).hexdigest()[:20]
+    return f"{scope}:{owner_id}:v{cache_version(scope, owner_id)}:{digest}"

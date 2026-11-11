@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
@@ -19,8 +20,13 @@ from rest_framework.throttling import UserRateThrottle, ScopedRateThrottle
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 
-from apps.core.utils import generate_reference, get_cache, set_cache
-from apps.core.constants import WITHDRAWAL_REFERENCE_PREFIX, MINIMUM_WITHDRAW_POINTS
+from apps.core.utils import (
+    generate_reference,
+    get_cache,
+    set_cache,
+    versioned_cache_key,
+)
+from apps.core.constants import WITHDRAWAL_REFERENCE_PREFIX
 from apps.core.choices import UserRole, PaymentStatus, TransactionType, WithdrawalStatus
 from apps.core.permissions import IsCustomer, IsVerifiedProvider
 
@@ -32,21 +38,23 @@ from apps.konnett_points.models import (
     ApprovedWithdrawalRequest,
 )
 from apps.konnett_points.serializers import (
-    UserPointWalletSerializer,
+    AdminWithdrawalRequestSerializer,
+    ApprovedWithdrawalRequestSerializer,
     PointPurchaseSerializer,
     PointTransactionSerializer,
+    UserPointWalletSerializer,
     WithdrawalRejectSerializer,
     WithdrawalRequestSerializer,
-    ApprovedWithdrawalRequestSerializer,
 )
 from apps.konnett_points.utils import (
     create_point_purchase_record,
-    credit_available_points,
-    update_purchase_status,
     create_point_transaction,
+    credit_available_points,
+    deduct_locked_points,
     lock_points,
     unlock_points,
-    deduct_locked_points,
+    update_purchase_status,
+    verify_webhook_signature,
 )
 from apps.konnett_points.filters import PointTransactionFilter, WithdrawalRequestFilter
 from apps.konnett_points.notifications import (
@@ -56,11 +64,47 @@ from apps.konnett_points.notifications import (
     create_withdrawal_request_received_notification,
     queue_withdrawal_email,
 )
+from apps.konnett_points.cache import (
+    TRANSACTIONS_SCOPE,
+    WITHDRAWALS_ADMIN_OWNER,
+    WITHDRAWALS_ADMIN_SCOPE,
+    WITHDRAWALS_USER_SCOPE,
+)
 
 from apps.mails.services import queue_email
 from apps.mails.tasks import process_email_outbox
 
 # Create your views here.
+
+
+class CachedListMixin:
+    """
+    Caches list responses (paginated or not) under a per-owner version key.
+    Changing the owner's data bumps the version, which makes every old page
+    unreachable at once. Move this to apps/core if you want to reuse it.
+    """
+
+    cache_timeout = None
+
+    def get_cache_scope(self, request):
+        raise NotImplementedError
+
+    def list(self, request, *args, **kwargs):
+        scope, owner_id = self.get_cache_scope(request)
+        key = versioned_cache_key(scope, owner_id, request.query_params)
+
+        data = get_cache(key)
+        if data is None:
+            queryset = self.filter_queryset(self.get_queryset())
+            page = self.paginate_queryset(queryset)  # 404 for an invalid page
+            if page is not None:
+                serializer = self.get_serializer(page, many=True)
+                data = self.get_paginated_response(serializer.data).data
+            else:
+                data = self.get_serializer(queryset, many=True).data
+            set_cache(key, data, timeout=self.cache_timeout)
+
+        return Response(data)
 
 
 # UserWalletView retrieves the authenticated user's PointWallet information.
@@ -69,42 +113,36 @@ class UserWalletView(generics.RetrieveAPIView):
     serializer_class = UserPointWalletSerializer
 
     def get_object(self):
-        return PointWallet.objects.select_related("user").get(user=self.request.user)
+        # 404 instead of a 500 when the user has no wallet
+        return get_object_or_404(
+            PointWallet.objects.select_related("user"), user=self.request.user
+        )
 
 
 # UserTransactionView retrieves the authenticated user's PointTransaction history.
-class UserTransactionView(generics.ListAPIView):
+class UserTransactionView(CachedListMixin, generics.ListAPIView):
     serializer_class = PointTransactionSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_class = PointTransactionFilter
-    ordering_fields = ["processed_at"]
+    ordering_fields = [
+        "created_at",
+        "points",
+    ]  # was "processed_at", which doesn't exist
+    ordering = ["-created_at"]
     throttle_classes = [UserRateThrottle]
+    cache_timeout = settings.MEDIUM_CACHE_TIMEOUT
+
+    def get_cache_scope(self, request):
+        return TRANSACTIONS_SCOPE, request.user.id
 
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
             return PointTransaction.objects.none()
 
-        return (
-            PointTransaction.objects.filter(wallet=self.request.user.point_wallet)
-            .select_related("wallet__user")
-            .order_by("-created_at")
-        )
-
-    def list(self, request, *args, **kwargs):
-        wallet_id = request.user.point_wallet.id
-
-        cache_key = f"wallet:{wallet_id}:transactions:{request.GET.urlencode()}"
-        cached_data = get_cache(cache_key)
-        if cached_data is not None:
-            return Response(cached_data)
-
-        queryset = self.filter_queryset(self.get_queryset())
-        serializer = self.get_serializer(queryset, many=True)
-
-        set_cache(cache_key, serializer.data, timeout=settings.MEDIUM_CACHE_TIMEOUT)
-
-        return Response(serializer.data)
+        return PointTransaction.objects.filter(
+            wallet__user=self.request.user
+        ).select_related("wallet__user")
 
 
 # PointPurchaseView allows customers to create a new PointPurchase record.
@@ -143,9 +181,19 @@ class PointPurchaseView(generics.CreateAPIView):
         )
 
 
+# Maps the provider's status strings to your PaymentStatus values.
+# Check the provider's docs for the exact strings they send.
+PROVIDER_STATUS_MAP = {
+    "successful": PaymentStatus.SUCCESSFUL,
+    "success": PaymentStatus.SUCCESSFUL,
+    "failed": PaymentStatus.FAILED,
+}
+
+
 # PointPurchaseVerificationView handles the verification of point purchases via a webhook from the payment provider.
 class PointPurchaseVerificationView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []  # a webhook is never a logged-in session
     http_method_names = ["post"]
 
     @extend_schema(
@@ -153,34 +201,24 @@ class PointPurchaseVerificationView(APIView):
         responses={
             200: OpenApiTypes.OBJECT,
             400: OpenApiTypes.OBJECT,
+            401: OpenApiTypes.OBJECT,
             404: OpenApiTypes.OBJECT,
         },
     )
     @transaction.atomic
     def post(self, request):
+        # Must run BEFORE request.data is read: parsing the body consumes the
+        # stream, and request.body then raises.
+        if not verify_webhook_signature(request):
+            return Response(
+                {"detail": "Invalid webhook signature."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
         data = request.data
-
-        # Todo IMPORTANT:
-        # Implement this using your payment provider's webhook # signature/secret mechanism.
-        # if not verify_webhook(request):
-        #     return Response(
-        #         {"detail": "Invalid webhook signature."},
-        #         status=status.HTTP_401_UNAUTHORIZED,
-        #     )
-
-        payment_status = data.get("status")
         payment_reference = data.get("txRef")
+        payment_status = PROVIDER_STATUS_MAP.get(str(data.get("status", "")).lower())
         payment_amount = data.get("amount")
-
-        try:
-            purchased_at = parse_datetime(str(data.get("createdAt") or ""))
-        except ValueError:
-            purchased_at = None
-
-        if purchased_at is not None and timezone.is_naive(purchased_at):
-            purchased_at = timezone.make_aware(purchased_at)
-
-        purchased_at = purchased_at or timezone.now()
 
         if not payment_reference:
             return Response(
@@ -188,23 +226,34 @@ class PointPurchaseVerificationView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Lock the purchase so concurrent webhook requests cannot process
-        # the same purchase at the same time.
+        if payment_status is None:
+            return Response(
+                {"detail": "Unsupported payment status."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            purchased_at = parse_datetime(str(data.get("createdAt") or ""))
+        except ValueError:
+            purchased_at = None
+        if purchased_at is not None and timezone.is_naive(purchased_at):
+            purchased_at = timezone.make_aware(purchased_at)
+        purchased_at = purchased_at or timezone.now()
+
+        # Lock the purchase so concurrent webhook deliveries can't both process it.
         purchase = (
-            PointPurchase.objects.select_for_update()
+            PointPurchase.objects.select_for_update(of=("self",))
             .select_related("customer__user")
             .filter(payment_reference=payment_reference)
             .first()
         )
-
-        # If the purchase record is not found, return a 404 response indicating that the point purchase was not found.
         if purchase is None:
             return Response(
                 {"detail": "Point purchase not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # A successful purchase must never be credited a second time.
+        # A successful purchase must never be credited twice.
         if purchase.status == PaymentStatus.SUCCESSFUL:
             return Response(
                 {"detail": "Purchase has already been processed."},
@@ -213,56 +262,36 @@ class PointPurchaseVerificationView(APIView):
 
         # Handle failed payments.
         if payment_status == PaymentStatus.FAILED:
-            update_purchase_status(
-                purchase,
-                PaymentStatus.FAILED,
-            )
+            if purchase.status == PaymentStatus.FAILED:
+                return Response(
+                    {"detail": "Purchase already marked as failed."},
+                    status=status.HTTP_200_OK,
+                )
 
-            # Queue the email for failed purchase
+            update_purchase_status(purchase, PaymentStatus.FAILED)
+
             email, _ = queue_email(
                 idempotency_key=f"point-purchase-failed:{purchase.pk}",
                 recipient=purchase.customer.user.email,
                 email_type="point_purchase_failed",
                 payload={"purchase_pk": str(purchase.pk)},
             )
-
-            # Both the notification and Celery task are triggered only
-            # after the purchase/outbox transaction commits.
             transaction.on_commit(
                 lambda: create_point_purchase_failed_notification(
-                    user=purchase.customer.user,
-                    purchase=purchase,
-                )
+                    user=purchase.customer.user, purchase=purchase
+                ),
+                robust=True,
             )
-
             transaction.on_commit(
-                lambda email_id=email.pk: process_email_outbox.delay(email_id)
+                lambda email_id=email.pk: process_email_outbox.delay(email_id),
+                robust=True,
             )
-
             return Response(
                 {"detail": "Purchase marked as failed."},
                 status=status.HTTP_200_OK,
             )
 
-        # Reject unknown payment statuses.
-        if payment_status != PaymentStatus.SUCCESSFUL:
-            return Response(
-                {"detail": "Unsupported payment status."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if (
-            purchase.status == PaymentStatus.FAILED
-            and payment_status == PaymentStatus.FAILED
-        ):
-            return Response(
-                {"detail": "Purchase already marked as failed."},
-                status=status.HTTP_200_OK,
-            )
-
-        # If the payment amount is provided,
-        # validate it to ensure it is a valid decimal number and matches the expected amount for the purchase.
-        # If the validation fails, return a 400 response with an appropriate error message.
+        # ---- successful payment ----
         if payment_amount is None:
             return Response(
                 {"detail": "Payment amount is required."},
@@ -283,23 +312,14 @@ class PointPurchaseVerificationView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Lock the wallet while updating its point balance.
-        wallet = PointWallet.objects.select_for_update().get(
-            user=purchase.customer.user
+        wallet = get_object_or_404(
+            PointWallet.objects.select_for_update(), user_id=purchase.customer.user_id
         )
 
-        # Mark the purchase successful.
         update_purchase_status(
-            purchase,
-            PaymentStatus.SUCCESSFUL,
-            purchased_at=purchased_at,
+            purchase, PaymentStatus.SUCCESSFUL, purchased_at=purchased_at
         )
-        # Credit the purchased points to the user's available points in their PointWallet
-        credit_available_points(
-            wallet,
-            purchase.credited_points,
-        )
-        # Create a PointTransaction record to log the successful purchase transaction.
+        credit_available_points(wallet, purchase.credited_points)
         create_point_transaction(
             wallet=wallet,
             points=purchase.credited_points,
@@ -307,27 +327,23 @@ class PointPurchaseVerificationView(APIView):
             purchase=purchase,
         )
 
-        # Create the email job in the SAME database transaction as
-        # the purchase update and point credit.
+        # Same DB transaction as the credit, so both succeed or fail together.
         email, _ = queue_email(
             idempotency_key=f"point-purchase-success:{purchase.pk}",
             recipient=purchase.customer.user.email,
             email_type="point_purchase_successful",
             payload={"purchase_pk": str(purchase.pk)},
         )
-
-        # Create the in-app notification only after the transaction commits.
         transaction.on_commit(
             lambda: create_point_purchase_successful_notification(
-                user=purchase.customer.user,
-                purchase=purchase,
-            )
+                user=purchase.customer.user, purchase=purchase
+            ),
+            robust=True,
         )
-
-        # Ask Celery to process the email only after the transaction commits.
-        # The periodic task is the backup if Celery cannot be queued here.
+        # The periodic task is the backup if Celery can't be reached here.
         transaction.on_commit(
-            lambda email_id=email.pk: process_email_outbox.delay(email_id)
+            lambda email_id=email.pk: process_email_outbox.delay(email_id),
+            robust=True,
         )
 
         return Response(
@@ -340,62 +356,110 @@ class PointPurchaseVerificationView(APIView):
         )
 
 
+def visible_withdrawals(user):
+    """Withdrawal requests this user is allowed to see."""
+    if user.is_staff:
+        return WithdrawalRequest.objects.select_related("user", "processed_by")
+    if user.role in (UserRole.PROVIDER, UserRole.CUSTOMER):
+        return WithdrawalRequest.objects.filter(user=user)
+    return WithdrawalRequest.objects.none()
+
+
 # WithdrawalRequestListCreateView handles the creation and listing of withdrawal requests for providers.
 class WithdrawalRequestListCreateView(
+    CachedListMixin,
     mixins.CreateModelMixin,
-    mixins.ListModelMixin,
     generics.GenericAPIView,
 ):
-    queryset = WithdrawalRequest.objects.all()
-    serializer_class = WithdrawalRequestSerializer
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_class = WithdrawalRequestFilter
+    ordering_fields = ["created_at", "points"]
+    ordering = ["-created_at"]
     throttle_scope = "withdrawals"
+    cache_timeout = settings.SMALL_CACHE_TIMEOUT
 
     def get_permissions(self):
         if self.request.method == "POST":
             return [IsVerifiedProvider() | IsCustomer()]
-
         return [IsAuthenticated()]
 
-    # get method handles the listing of withdrawal requests
+    def get_throttles(self):
+        if self.request.method == "GET":
+            return [UserRateThrottle()]
+        return [ScopedRateThrottle()]
+
+    def get_serializer_class(self):
+        if self.request.method == "GET" and self.request.user.is_staff:
+            return AdminWithdrawalRequestSerializer
+        return WithdrawalRequestSerializer
+
+    def get_cache_scope(self, request):
+        if request.user.is_staff:
+            return WITHDRAWALS_ADMIN_SCOPE, WITHDRAWALS_ADMIN_OWNER
+        return WITHDRAWALS_USER_SCOPE, request.user.id
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return WithdrawalRequest.objects.none()
+
+        queryset = visible_withdrawals(self.request.user)
+        if self.request.user.is_staff:
+            return queryset.filter(status=WithdrawalStatus.PENDING)
+        return queryset
+
     def get(self, request, *args, **kwargs):
         return self.list(request, *args, **kwargs)
 
-    # post method handles the creation of a new withdrawal request
     def post(self, request, *args, **kwargs):
         return self.create(request, *args, **kwargs)
 
-    # create method handles the creation of a new withdrawal request,
-    # ensuring that the user has enough available points and meets the minimum withdrawal requirement.
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        serializer.is_valid(raise_exception=True)  # also enforces the minimum points
 
         user = request.user
-
-        minimum_withdraw_points = MINIMUM_WITHDRAW_POINTS
         points_to_withdraw = serializer.validated_data["points"]
 
-        if points_to_withdraw < minimum_withdraw_points:
+        bank_details = {
+            "account_number": user.account_number,
+            "account_name": user.account_name,
+            "bank_name": user.bank_name,
+        }
+        if not (
+            re.fullmatch(r"\d{10}", user.account_number or "")
+            and user.account_name
+            and user.bank_name
+        ):
             raise ValidationError(
-                {"points": f"Minimum points to withdraw is {minimum_withdraw_points}."}
+                {
+                    "bank_details": "Add valid bank details to your profile before requesting a withdrawal."
+                }
             )
 
-        wallet = PointWallet.objects.select_for_update().get(user=user)
+        # Locking the wallet also serialises this user's requests, so the
+        # pending check below can't race.
+        wallet = get_object_or_404(PointWallet.objects.select_for_update(), user=user)
+
+        # Matches the one_pending_withdrawal_per_user constraint. Remove this
+        # check if you dropped that constraint.
+        if WithdrawalRequest.objects.filter(
+            user=user, status=WithdrawalStatus.PENDING
+        ).exists():
+            raise ValidationError(
+                {"detail": "You already have a pending withdrawal request."}
+            )
 
         if wallet.available_points < points_to_withdraw:
             raise ValidationError({"points": "Insufficient available points."})
 
-        lock_points(
-            wallet,
-            points_to_withdraw,
-        )
+        lock_points(wallet, points_to_withdraw)
 
+        # Snapshot the bank details: later edits to the User can't redirect this payout
         withdrawal = serializer.save(
             user=user,
             withdrawal_reference=generate_reference(WITHDRAWAL_REFERENCE_PREFIX),
+            **bank_details,
         )
 
         create_point_transaction(
@@ -405,62 +469,17 @@ class WithdrawalRequestListCreateView(
             withdrawal_request=withdrawal,
         )
 
-        # -- BACKGROUNF TASK ---
-        # Notify the provider
         transaction.on_commit(
             lambda: create_withdrawal_request_received_notification(
-                user=user, points_to_withdraw=points_to_withdraw
-            )
+                user=user, withdrawal=withdrawal
+            ),
+            robust=True,
         )
 
         return Response(
             self.get_serializer(withdrawal).data,
             status=status.HTTP_201_CREATED,
         )
-
-    def list(self, request, *args, **kwargs):
-        if request.user.is_staff:
-            cache_key = f"withdrawal_requests:admin:pending:{request.GET.urlencode()}"
-        else:
-            user_id = request.user.id
-            cache_key = (
-                f"withdrawal_requests:user:{user_id}:{request.GET.urlencode()}"
-            )
-
-        cached_data = get_cache(cache_key)
-        if cached_data is not None:
-            return Response(cached_data)
-
-        queryset = self.filter_queryset(self.get_queryset())
-        serializer = self.get_serializer(queryset, many=True)
-
-        set_cache(cache_key, serializer.data, timeout=settings.SMALL_CACHE_TIMEOUT)
-
-        return Response(serializer.data)
-
-    # get_queryset method filters the withdrawal requests based on the user's role and returns the appropriate queryset.
-    # If the user is an admin, it returns all pending withdrawal requests.
-    # If the user is a provider, it returns only their own withdrawal requests.
-    def get_queryset(self):
-        queryset = self.queryset.select_related(
-            "user",
-            "processed_by",
-        )
-
-        if self.request.user.is_staff:
-            return queryset.filter(status=WithdrawalStatus.PENDING)
-
-        if self.request.user.role == UserRole.PROVIDER | UserRole.CUSTOMER:
-            return queryset.filter(
-                user=self.request.user
-            ).order_by("-created_at")
-
-        return queryset.none()
-
-    def get_throttles(self):
-        if self.request.method == "GET":
-            return [UserRateThrottle()]
-        return [ScopedRateThrottle()]
 
 
 # WithdrawalRequestRetrieveView retrieves a specific withdrawal request based on the user ID.
@@ -469,40 +488,33 @@ class WithdrawalRequestRetrieveView(
     mixins.RetrieveModelMixin,
     generics.GenericAPIView,
 ):
-    queryset = WithdrawalRequest.objects.all()
-    serializer_class = WithdrawalRequestSerializer
+    # Access is enforced by the queryset: admins see everything, providers and
+    # customers only their own requests, so IsAuthenticated is enough.
+    permission_classes = [IsAuthenticated]
 
-    def get_permissions(self):
-        return [(IsAdminUser | IsVerifiedProvider)()]
+    def get_serializer_class(self):
+        if self.request.user.is_staff:
+            return AdminWithdrawalRequestSerializer
+        return WithdrawalRequestSerializer
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return WithdrawalRequest.objects.none()
+        return visible_withdrawals(self.request.user)
 
     def get(self, request, *args, **kwargs):
         return self.retrieve(request, *args, **kwargs)
-
-    def get_queryset(self):
-        queryset = self.queryset.select_related(
-            "user",
-            "processed_by",
-        )
-
-        if self.request.user.is_staff:
-            return queryset
-
-        if self.request.user.role == UserRole.PROVIDER | UserRole.CUSTOMER:
-            return queryset.filter(user=self.request.user)
-
-        return queryset.none()
 
 
 # WithdrawalApproveView handles the approval of pending withdrawal requests by admins.
 class WithdrawalApproveView(generics.UpdateAPIView):
     queryset = WithdrawalRequest.objects.all()
-    serializer_class = WithdrawalRequestSerializer
+    serializer_class = AdminWithdrawalRequestSerializer
     permission_classes = [IsAdminUser]
     http_method_names = ["patch"]
 
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
-        # Lock the withdrawal request for update to prevent race conditions during approval.
         withdrawal = get_object_or_404(
             WithdrawalRequest.objects.select_for_update(of=("self",)).select_related(
                 "user"
@@ -510,40 +522,26 @@ class WithdrawalApproveView(generics.UpdateAPIView):
             pk=kwargs["pk"],
         )
 
-        # If the withdrawal request is not in a pending state,
-        # return a 400 response indicating that only pending withdrawals can be approved.
         if withdrawal.status != WithdrawalStatus.PENDING:
             return Response(
-                {"detail": ("Only pending withdrawals can be approved.")},
+                {"detail": "Only pending withdrawals can be approved."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Lock the user's PointWallet for update
-        # to ensure that the available points are accurately checked and updated during the approval process.
-        wallet = PointWallet.objects.select_for_update().get(
-            user=withdrawal.user
+        wallet = get_object_or_404(
+            PointWallet.objects.select_for_update(), user_id=withdrawal.user_id
         )
 
-        # If the user does not have enough locked points for the withdrawal,
-        # return a 400 response indicating that the user does not have enough locked points for this
         if wallet.locked_points < withdrawal.points:
             return Response(
                 {
-                    "detail": (
-                        "The User does not have enough "
-                        "locked points for this withdrawal."
-                    )
+                    "detail": "The user does not have enough locked points for this withdrawal."
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Permanently remove the points from the wallet.
-        #
         # locked_points -> deducted
-        deduct_locked_points(
-            wallet,
-            withdrawal.points,
-        )
+        deduct_locked_points(wallet, withdrawal.points)
 
         create_point_transaction(
             wallet=wallet,
@@ -555,28 +553,22 @@ class WithdrawalApproveView(generics.UpdateAPIView):
         withdrawal.status = WithdrawalStatus.APPROVED
         withdrawal.processed_by = request.user
         withdrawal.processed_at = timezone.now()
-
         withdrawal.save(
-            update_fields=[
-                "status",
-                "processed_by",
-                "processed_at",
-            ]
+            update_fields=["status", "processed_by", "processed_at", "updated_at"]
         )
 
-        # Queue withdrawal approved email
+        # Explicit now, instead of a post_save signal. The OneToOne guards against duplicates.
+        ApprovedWithdrawalRequest.objects.create(withdrawal=withdrawal)
+
         queue_withdrawal_email(withdrawal, WithdrawalStatus.APPROVED)
 
-        return Response(
-            self.get_serializer(withdrawal).data,
-            status=status.HTTP_200_OK,
-        )
+        return Response(self.get_serializer(withdrawal).data, status=status.HTTP_200_OK)
 
 
 # WithdrawalRejectView handles the rejection of pending withdrawal requests by admins.
 class WithdrawalRejectView(generics.UpdateAPIView):
     queryset = WithdrawalRequest.objects.all()
-    serializer_class = WithdrawalRequestSerializer
+    serializer_class = AdminWithdrawalRequestSerializer
     permission_classes = [IsAdminUser]
     http_method_names = ["patch"]
 
@@ -595,32 +587,24 @@ class WithdrawalRejectView(generics.UpdateAPIView):
 
         if withdrawal.status != WithdrawalStatus.PENDING:
             return Response(
-                {"detail": ("Only pending withdrawals can be rejected.")},
+                {"detail": "Only pending withdrawals can be rejected."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        wallet = PointWallet.objects.select_for_update().get(
-            user=withdrawal.user
+        wallet = get_object_or_404(
+            PointWallet.objects.select_for_update(), user_id=withdrawal.user_id
         )
 
         if wallet.locked_points < withdrawal.points:
             return Response(
                 {
-                    "detail": (
-                        "The User does not have enough "
-                        "locked points for this withdrawal."
-                    )
+                    "detail": "The user does not have enough locked points for this withdrawal."
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Return the points to the user.
-        #
         # locked_points -> available_points
-        unlock_points(
-            wallet,
-            withdrawal.points,
-        )
+        unlock_points(wallet, withdrawal.points)
 
         create_point_transaction(
             wallet=wallet,
@@ -633,34 +617,31 @@ class WithdrawalRejectView(generics.UpdateAPIView):
         withdrawal.reject_reason = reject_reason
         withdrawal.processed_by = request.user
         withdrawal.processed_at = timezone.now()
-
         withdrawal.save(
             update_fields=[
                 "status",
                 "reject_reason",
                 "processed_by",
                 "processed_at",
+                "updated_at",
             ]
         )
 
-        # Queue withdrawal rejected email
         queue_withdrawal_email(
-            withdrawal,
-            WithdrawalStatus.REJECTED,
-            reject_reason=reject_reason,
+            withdrawal, WithdrawalStatus.REJECTED, reject_reason=reject_reason
         )
 
-        return Response(
-            self.get_serializer(withdrawal).data,
-            status=status.HTTP_200_OK,
-        )
+        return Response(self.get_serializer(withdrawal).data, status=status.HTTP_200_OK)
 
 
-class ApprovedWithdrawalRequestViewset(viewsets.ModelViewSet):
-    queryset = ApprovedWithdrawalRequest.objects.filter(paid=False)
+class ApprovedWithdrawalRequestViewset(viewsets.ReadOnlyModelViewSet):
     serializer_class = ApprovedWithdrawalRequestSerializer
-    http_method_names = ["get"]
     permission_classes = [IsAdminUser]
+    queryset = (
+        ApprovedWithdrawalRequest.objects.filter(paid=False)
+        .select_related("withdrawal__user", "withdrawal__processed_by")
+        .order_by("created_at")  # oldest first, so payouts go in order
+    )
 
 
 class ApprovedWithdrawalRequestPaidView(generics.UpdateAPIView):
@@ -673,7 +654,7 @@ class ApprovedWithdrawalRequestPaidView(generics.UpdateAPIView):
     def patch(self, request, *args, **kwargs):
         approved_withdrawal = get_object_or_404(
             ApprovedWithdrawalRequest.objects.select_for_update(
-                of=("self",)
+                of=("self", "withdrawal")
             ).select_related("withdrawal__user"),
             pk=kwargs["pk"],
         )
@@ -685,7 +666,6 @@ class ApprovedWithdrawalRequestPaidView(generics.UpdateAPIView):
             )
 
         withdrawal = approved_withdrawal.withdrawal
-
         if withdrawal.status != WithdrawalStatus.APPROVED:
             return Response(
                 {"detail": "Only approved withdrawals can be marked as paid."},
@@ -693,12 +673,13 @@ class ApprovedWithdrawalRequestPaidView(generics.UpdateAPIView):
             )
 
         approved_withdrawal.paid = True
-        approved_withdrawal.save(update_fields=["paid"])
+        approved_withdrawal.save(
+            update_fields=["paid", "updated_at"]
+        )  # model save() adds paid_on
 
         withdrawal.status = WithdrawalStatus.PAID
-        withdrawal.save(update_fields=["status"])
+        withdrawal.save(update_fields=["status", "updated_at"])
 
-        # Queue withdrawal paid email
         queue_withdrawal_email(withdrawal, WithdrawalStatus.PAID)
 
         return Response(self.get_serializer(approved_withdrawal).data)

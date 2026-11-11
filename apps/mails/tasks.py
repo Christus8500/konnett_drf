@@ -10,7 +10,12 @@ from apps.core.choices import EmailOutboxStatus
 
 from apps.mails.models import EmailOutbox
 
-from apps.accounts.utils import send_account_verification_email
+from apps.accounts.utils import (
+    send_account_verification_email,
+    send_password_reset_email,
+    send_email_change_confirmation,
+    send_email_change_notice,
+)
 
 User = get_user_model()
 
@@ -53,6 +58,18 @@ def send_outbox_email(email):
             user=user,
         )
 
+    elif email.email_type == "password_reset":
+        user = User.objects.get(pk=email.payload["user_id"])
+        send_password_reset_email(user=user)
+
+    elif email.email_type == "email_change":
+        user = User.objects.get(pk=email.payload["user_id"])
+        send_email_change_confirmation(user=user, new_email=email.payload["new_email"])
+
+    elif email.email_type == "email_change_notice":
+        user = User.objects.get(pk=email.payload["user_id"])
+        send_email_change_notice(user=user, new_email=email.payload["new_email"])
+
     elif email.email_type == "withdrawal_status":
         withdrawal = WithdrawalRequest.objects.select_related("user").get(
             pk=email.payload["withdrawal_pk"]
@@ -66,13 +83,13 @@ def send_outbox_email(email):
 
     elif email.email_type == "provider_verification":
         verification_pk = email.payload["verification_pk"]
-        verification = ProviderVerification.objects.select_related("provider__user").get(
-            pk=verification_pk
-        )
+        verification = ProviderVerification.objects.select_related(
+            "provider__user"
+        ).get(pk=verification_pk)
         send_provider_verification_email(
             user=verification.provider.user,
             status=email.payload["status"],
-            admin_comment=email.payload.get("admin_comment") or None
+            admin_comment=email.payload.get("admin_comment") or None,
         )
 
     else:
