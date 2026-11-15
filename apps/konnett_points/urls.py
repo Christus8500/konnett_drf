@@ -40,7 +40,8 @@ urlpatterns = [
         "transactions/", UserTransactionView.as_view(), name="user-wallet-transactions"
     ),
     # Point Purchase
-    path("purchase/", PointPurchaseView.as_view(), name="purchase-konnett-points"),
+    path("purchase/", PointPurchaseView.as_view(),
+         name="purchase-konnett-points"),
     # Point Purchase Verification
     path(
         "purchase/verify/",
