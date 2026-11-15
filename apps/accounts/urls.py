@@ -1,5 +1,5 @@
 from django.urls import path, include
-from rest_framework.routers import DefaultRouter
+from rest_framework.routers import DefaultRouter, SimpleRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from apps.accounts.views import (
@@ -15,7 +15,8 @@ from apps.accounts.views import (
     EmailChangeConfirmView,
 )
 
-router = DefaultRouter()
+router = SimpleRouter()
+# router = DefaultRouter() //Use for browsable API, but it adds an extra route for the root view, which we don't need.
 router.register("users", UserViewSet, basename="user")
 
 urlpatterns = [

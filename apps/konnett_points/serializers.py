@@ -9,6 +9,7 @@ from apps.core.constants import MINIMUM_WITHDRAW_POINTS
 from apps.core.utils import mask_account_number
 
 from apps.konnett_points.models import (
+    PlatformFeeEntry,
     PointWallet,
     PointPurchase,
     PointTransaction,
@@ -34,7 +35,7 @@ class UserPointWalletSerializer(serializers.ModelSerializer):
 # including customer details and purchase information.
 class PointPurchaseSerializer(serializers.ModelSerializer):
     customer_fullname = serializers.CharField(
-        source="customer.fullname", read_only=True
+        source="customer.full_name", read_only=True
     )
     customer_email = serializers.EmailField(
         source="customer.user.email",
@@ -74,7 +75,8 @@ class PointPurchaseSerializer(serializers.ModelSerializer):
     # validate_money_amount ensures that the money amount is a whole number and meets the minimum requirement.
     def validate_money_amount(self, value):
         if value % 1 != 0:
-            raise serializers.ValidationError("Only whole naira amounts are allowed.")
+            raise serializers.ValidationError(
+                "Only whole naira amounts are allowed.")
         elif value < 100:
             raise serializers.ValidationError("Minimum amount is 100")
         return value
@@ -160,9 +162,11 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
 class AdminWithdrawalRequestSerializer(serializers.ModelSerializer):
     """For admins paying out: full bank details from the request's snapshot."""
 
-    user_fullname = serializers.CharField(source="user.full_name", read_only=True)
+    user_fullname = serializers.CharField(
+        source="user.full_name", read_only=True)
     user_email = serializers.EmailField(source="user.email", read_only=True)
-    user_phone_number = serializers.CharField(source="user.phone_number", read_only=True)
+    user_phone_number = serializers.CharField(
+        source="user.phone_number", read_only=True)
     user_role = serializers.CharField(source="user.role", read_only=True)
     processed_by = serializers.StringRelatedField(read_only=True)
 
@@ -198,4 +202,12 @@ class ApprovedWithdrawalRequestSerializer(serializers.ModelSerializer):
     class Meta:
         model = ApprovedWithdrawalRequest
         fields = ["id", "withdrawal", "paid", "paid_on"]
+        read_only_fields = fields
+
+
+class PlatformFeeEntrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PlatformFeeEntry
+        fields = ["id", "source", "points",
+                  "purchase_id", "job_id", "created_at"]
         read_only_fields = fields

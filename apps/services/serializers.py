@@ -20,7 +20,7 @@ class ServiceReadSerializer(serializers.ModelSerializer):
             read_only_fields = ["id"]
 
     provider_id = serializers.UUIDField(source="provider.id", read_only=True)
-    provider_name = serializers.CharField(source="provider.fullname", read_only=True)
+    provider_name = serializers.CharField(source="provider.full_name", read_only=True)
     provider_image = serializers.ImageField(
         source="provider.profile_image", read_only=True
     )

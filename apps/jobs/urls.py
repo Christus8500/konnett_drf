@@ -1,6 +1,6 @@
 from django.urls import path, include
 
-from rest_framework.routers import DefaultRouter
+from rest_framework.routers import SimpleRouter
 
 from apps.jobs.views import (
     JobRequestViewSet,
@@ -18,7 +18,7 @@ from apps.jobs.views import (
     AdminResolveDisputeView,
 )
 
-router = DefaultRouter()
+router = SimpleRouter()
 router.register("", JobRequestViewSet, basename="job")
 
 urlpatterns = [

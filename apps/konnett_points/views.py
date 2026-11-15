@@ -3,6 +3,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.shortcuts import get_object_or_404
@@ -16,6 +17,7 @@ from rest_framework.permissions import IsAdminUser, IsAuthenticated, AllowAny
 from rest_framework.exceptions import ValidationError
 from rest_framework.filters import OrderingFilter
 from rest_framework.throttling import UserRateThrottle, ScopedRateThrottle
+from rest_framework.decorators import action
 
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
@@ -27,10 +29,11 @@ from apps.core.utils import (
     versioned_cache_key,
 )
 from apps.core.constants import WITHDRAWAL_REFERENCE_PREFIX
-from apps.core.choices import UserRole, PaymentStatus, TransactionType, WithdrawalStatus
+from apps.core.choices import PlatformFeeSource, UserRole, PaymentStatus, TransactionType, WithdrawalStatus
 from apps.core.permissions import IsCustomer, IsVerifiedProvider
 
 from apps.konnett_points.models import (
+    PlatformFeeEntry,
     PointWallet,
     PointPurchase,
     PointTransaction,
@@ -40,6 +43,7 @@ from apps.konnett_points.models import (
 from apps.konnett_points.serializers import (
     AdminWithdrawalRequestSerializer,
     ApprovedWithdrawalRequestSerializer,
+    PlatformFeeEntrySerializer,
     PointPurchaseSerializer,
     PointTransactionSerializer,
     UserPointWalletSerializer,
@@ -52,6 +56,7 @@ from apps.konnett_points.utils import (
     credit_available_points,
     deduct_locked_points,
     lock_points,
+    record_platform_fee,
     unlock_points,
     update_purchase_status,
     verify_webhook_signature,
@@ -217,7 +222,8 @@ class PointPurchaseVerificationView(APIView):
 
         data = request.data
         payment_reference = data.get("txRef")
-        payment_status = PROVIDER_STATUS_MAP.get(str(data.get("status", "")).lower())
+        payment_status = PROVIDER_STATUS_MAP.get(
+            str(data.get("status", "")).lower())
         payment_amount = data.get("amount")
 
         if not payment_reference:
@@ -327,6 +333,12 @@ class PointPurchaseVerificationView(APIView):
             purchase=purchase,
         )
 
+        record_platform_fee(
+            purchase.admin_fee_points,
+            PlatformFeeSource.PURCHASE_FEE,
+            purchase=purchase,
+        )
+
         # Same DB transaction as the credit, so both succeed or fail together.
         email, _ = queue_email(
             idempotency_key=f"point-purchase-success:{purchase.pk}",
@@ -416,7 +428,8 @@ class WithdrawalRequestListCreateView(
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)  # also enforces the minimum points
+        # also enforces the minimum points
+        serializer.is_valid(raise_exception=True)
 
         user = request.user
         points_to_withdraw = serializer.validated_data["points"]
@@ -439,7 +452,8 @@ class WithdrawalRequestListCreateView(
 
         # Locking the wallet also serialises this user's requests, so the
         # pending check below can't race.
-        wallet = get_object_or_404(PointWallet.objects.select_for_update(), user=user)
+        wallet = get_object_or_404(
+            PointWallet.objects.select_for_update(), user=user)
 
         # Matches the one_pending_withdrawal_per_user constraint. Remove this
         # check if you dropped that constraint.
@@ -458,7 +472,8 @@ class WithdrawalRequestListCreateView(
         # Snapshot the bank details: later edits to the User can't redirect this payout
         withdrawal = serializer.save(
             user=user,
-            withdrawal_reference=generate_reference(WITHDRAWAL_REFERENCE_PREFIX),
+            withdrawal_reference=generate_reference(
+                WITHDRAWAL_REFERENCE_PREFIX),
             **bank_details,
         )
 
@@ -554,7 +569,8 @@ class WithdrawalApproveView(generics.UpdateAPIView):
         withdrawal.processed_by = request.user
         withdrawal.processed_at = timezone.now()
         withdrawal.save(
-            update_fields=["status", "processed_by", "processed_at", "updated_at"]
+            update_fields=["status", "processed_by",
+                           "processed_at", "updated_at"]
         )
 
         # Explicit now, instead of a post_save signal. The OneToOne guards against duplicates.
@@ -683,3 +699,23 @@ class ApprovedWithdrawalRequestPaidView(generics.UpdateAPIView):
         queue_withdrawal_email(withdrawal, WithdrawalStatus.PAID)
 
         return Response(self.get_serializer(approved_withdrawal).data)
+
+
+class PlatformFeeEntryViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = PlatformFeeEntrySerializer
+    permission_classes = [IsAdminUser]
+    queryset = PlatformFeeEntry.objects.all()
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    filterset_fields = ["source"]
+    ordering_fields = ["created_at", "points"]
+
+    @action(detail=False, methods=["get"])
+    def total(self, request):
+        qs = self.filter_queryset(self.get_queryset())
+        by_source = qs.values("source").annotate(total=Sum("points"))
+        return Response(
+            {
+                "total_points": sum(row["total"] for row in by_source),
+                "by_source": {row["source"]: row["total"] for row in by_source},
+            }
+        )

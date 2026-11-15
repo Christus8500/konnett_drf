@@ -5,14 +5,14 @@ from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils import timezone
 
-from apps.core.choices import PaymentStatus, TransactionType, WithdrawalStatus
+from apps.core.choices import PaymentStatus, PlatformFeeSource, TransactionType, WithdrawalStatus
 from apps.core.models import TimeStampedModel, UUIDModel
 
 # Create your models here.
 
 
 # PointWallet model represents a user's point balance.
-class PointWallet(UUIDModel):
+class PointWallet(UUIDModel, TimeStampedModel):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -67,7 +67,7 @@ class PointPurchase(UUIDModel, TimeStampedModel):
         ]
 
     def __str__(self):
-        return f"{self.customer.fullname} bought {self.points} points"
+        return f"{self.customer.full_name} bought {self.points} points"
 
 
 # WithdrawalRequest model represents a request by a user to withdraw points from their PointWallet.
@@ -131,7 +131,7 @@ class WithdrawalRequest(UUIDModel, TimeStampedModel):
         return f"{self.user} requested {self.points} points withdrawal"
 
 
-class ApprovedWithdrawalRequest(UUIDModel):
+class ApprovedWithdrawalRequest(UUIDModel, TimeStampedModel):
     withdrawal = models.OneToOneField(
         WithdrawalRequest,
         on_delete=models.PROTECT,
@@ -222,3 +222,66 @@ class PointTransaction(UUIDModel, TimeStampedModel):
             f"{self.wallet.user.email} > "
             f"{self.transaction_type.upper()} > {self.points} points"
         )
+
+
+class PlatformFeeEntry(UUIDModel, TimeStampedModel):
+    """Append-only record of every point the platform has earned."""
+
+    source = models.CharField(
+        max_length=30, choices=PlatformFeeSource.choices, db_index=True
+    )
+    points = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    purchase = models.ForeignKey(
+        PointPurchase,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="platform_fee_entries",
+    )
+    job = models.ForeignKey(
+        "jobs.JobRequest",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="platform_fee_entries",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name_plural = "platform fee entries"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(points__gte=1),
+                name="platform_fee_points_gte_1",
+            ),
+            # A purchase fee must point at a purchase (and only a purchase)...
+            models.CheckConstraint(
+                condition=(
+                    ~models.Q(source=PlatformFeeSource.PURCHASE_FEE)
+                    | (models.Q(purchase__isnull=False) & models.Q(job__isnull=True))
+                ),
+                name="platform_fee_purchase_source_links_purchase",
+            ),
+            # ...and a job fee at a job (and only a job).
+            models.CheckConstraint(
+                condition=(
+                    ~models.Q(source=PlatformFeeSource.JOB_FEE)
+                    | (models.Q(job__isnull=False) & models.Q(purchase__isnull=True))
+                ),
+                name="platform_fee_job_source_links_job",
+            ),
+            # Each purchase / job can produce its fee only once.
+            models.UniqueConstraint(
+                fields=["purchase"],
+                condition=models.Q(source=PlatformFeeSource.PURCHASE_FEE),
+                name="one_fee_entry_per_purchase",
+            ),
+            models.UniqueConstraint(
+                fields=["job"],
+                condition=models.Q(source=PlatformFeeSource.JOB_FEE),
+                name="one_fee_entry_per_job",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.source}: {self.points} points"

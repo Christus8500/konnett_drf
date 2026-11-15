@@ -95,7 +95,7 @@ class JobRequestOfferSerializer(serializers.ModelSerializer):
 
 class JobDisputeSerializer(serializers.ModelSerializer):
     customer = serializers.CharField(
-        source="job.customer.fullname",
+        source="job.customer.full_name",
         read_only=True,
     )
     job = serializers.CharField(
@@ -178,7 +178,7 @@ class JobRequestReadSerializer(serializers.ModelSerializer):
 
     def get_customer(self, job):
         if self._can_see_full_details(job):
-            return job.customer.fullname
+            return job.customer.full_name
         return job.customer.user.first_name or "Customer"
 
     def get_offers(self, job):
@@ -364,7 +364,7 @@ class AdminJobDisputeSerializer(serializers.ModelSerializer):
         read_only=True,
     )
     customer = serializers.CharField(
-        source="job.customer.fullname",
+        source="job.customer.full_name",
         read_only=True,
     )
 

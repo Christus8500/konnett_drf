@@ -1,8 +1,9 @@
 from django.urls import path, include
 
-from rest_framework.routers import DefaultRouter
+from rest_framework.routers import SimpleRouter
 
 from apps.konnett_points.views import (
+    PlatformFeeEntryViewSet,
     UserWalletView,
     UserTransactionView,
     PointPurchaseView,
@@ -15,11 +16,20 @@ from apps.konnett_points.views import (
     ApprovedWithdrawalRequestPaidView,
 )
 
-router = DefaultRouter()
-router.register(
+# Existing behaviour: list/retrieve at /approved_withdrawals/
+approved_router = SimpleRouter()
+approved_router.register(
     "",
     ApprovedWithdrawalRequestViewset,
     basename="approved-withdrawals",
+)
+
+# New: /platform-fees/
+fees_router = SimpleRouter()
+fees_router.register(
+    "",
+    PlatformFeeEntryViewSet,
+    basename="platform-fee",
 )
 
 urlpatterns = [
@@ -58,10 +68,13 @@ urlpatterns = [
         WithdrawalRejectView.as_view(),
         name="withdrawal-reject",
     ),
-    path("approved_withdrawals/", include(router.urls)),
+    # Approved withdrawals: the specific "paid" route goes BEFORE the router include
     path(
         "approved_withdrawals/<uuid:pk>/paid/",
         ApprovedWithdrawalRequestPaidView.as_view(),
         name="approved-withdrawal-paid",
     ),
+    path("approved_withdrawals/", include(approved_router.urls)),
+    # Platform fees (admin only)
+    path("platform-fees/", include(fees_router.urls)),
 ]

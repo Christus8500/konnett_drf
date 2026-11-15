@@ -1,9 +1,9 @@
-from rest_framework.routers import DefaultRouter
+from rest_framework.routers import SimpleRouter
 
 from apps.mails.views import MailboxMessageViewSet
 
 
-router = DefaultRouter()
+router = SimpleRouter()
 
 router.register(
     "my-mails",

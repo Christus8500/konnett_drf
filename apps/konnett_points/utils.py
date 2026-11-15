@@ -9,7 +9,7 @@ from django.utils import timezone
 
 from rest_framework.exceptions import ValidationError
 
-from apps.core.choices import PaymentStatus, TransactionType
+from apps.core.choices import PaymentStatus, PlatformFeeSource, TransactionType
 from apps.core.utils import generate_reference
 from apps.core.constants import (
     TRANSACTION_REFERENCE_PREFIX,
@@ -17,8 +17,7 @@ from apps.core.constants import (
     ADMIN_FEE_RATE,
 )
 
-from apps.konnett_points.models import PointWallet, PointTransaction, PointPurchase
-
+from apps.konnett_points.models import PlatformFeeEntry, PointWallet, PointTransaction, PointPurchase
 
 
 def verify_webhook_signature(request):
@@ -32,11 +31,13 @@ def verify_webhook_signature(request):
     your provider's docs and use the matching variant.
     """
     secret = settings.PAYMENT_WEBHOOK_SECRET
-    received = request.headers.get(settings.PAYMENT_WEBHOOK_SIGNATURE_HEADER, "")
+    received = request.headers.get(
+        settings.PAYMENT_WEBHOOK_SIGNATURE_HEADER, "")
     if not secret or not received:
         return False
 
-    expected = hmac.new(secret.encode(), request.body, hashlib.sha512).hexdigest()
+    expected = hmac.new(secret.encode(), request.body,
+                        hashlib.sha512).hexdigest()
     return hmac.compare_digest(received.encode(), expected.encode())
 
 
@@ -56,17 +57,30 @@ def lock_wallets(*user_ids):
         raise ValidationError({"wallet": "A required wallet does not exist."})
     return by_user
 
+
 SETTLED_TYPES = [
     TransactionType.EARNED,
     TransactionType.PROVIDER_PAY,
     TransactionType.REFUND,
 ]
 
+
 def ensure_unsettled(job):
     if PointTransaction.objects.filter(
         job=job, transaction_type__in=SETTLED_TYPES
     ).exists():
-        raise ValidationError({"job": "This job's points have already been settled."})
+        raise ValidationError(
+            {"job": "This job's points have already been settled."})
+
+
+# ^ ################### CREATE PLATFORM FEE ENTRY HELPER FUNCTION ####################
+
+def record_platform_fee(points, source, *, purchase=None, job=None):
+    if points <= 0:  # fees can round down to 0 on tiny amounts
+        return None
+    return PlatformFeeEntry.objects.create(
+        source=source, points=points, purchase=purchase, job=job
+    )
 
 # ^ ################### WALLET HELPER FUNCTIONS ####################
 
@@ -87,10 +101,12 @@ def lock_points(wallet, points_to_lock):
     from being spent or withdrawn until the operation is resolved.
     """
     if points_to_lock <= 0:
-        raise ValidationError({"points": "Points to lock must be greater than zero."})
+        raise ValidationError(
+            {"points": "Points to lock must be greater than zero."})
 
     if wallet.available_points < points_to_lock:
-        raise ValidationError({"available_points": "Insufficient available points."})
+        raise ValidationError(
+            {"available_points": "Insufficient available points."})
 
     wallet.available_points -= points_to_lock
     wallet.locked_points += points_to_lock
@@ -108,7 +124,8 @@ def unlock_points(wallet, points_to_unlock):
     Move points from locked_points back to available_points.
     """
     if points_to_unlock <= 0:
-        raise ValidationError({"points": "Points to unlock must be greater than zero."})
+        raise ValidationError(
+            {"points": "Points to unlock must be greater than zero."})
 
     if wallet.locked_points < points_to_unlock:
         raise ValidationError({"locked_points": "Insufficient locked points."})
@@ -132,7 +149,8 @@ def deduct_locked_points(wallet, points_to_deduct):
     such as an approved withdrawal.
     """
     if points_to_deduct <= 0:
-        raise ValidationError({"points": "Points to deduct must be greater than zero."})
+        raise ValidationError(
+            {"points": "Points to deduct must be greater than zero."})
 
     if wallet.locked_points < points_to_deduct:
         raise ValidationError({"locked_points": "Insufficient locked points."})
@@ -332,17 +350,23 @@ def pay_provider(job, accepted_offer):
     provider_wallet.save(update_fields=["available_points"])
 
     provider_tx = create_point_transaction(
-        wallet=provider_wallet, points=provider_points,
-        transaction_type=TransactionType.EARNED, job=job,
+        wallet=provider_wallet,
+        points=provider_points,
+        transaction_type=TransactionType.EARNED,
+        job=job,
     )
     customer_tx = create_point_transaction(
-        wallet=customer_wallet, points=job_points,
-        transaction_type=TransactionType.PROVIDER_PAY, job=job,
+        wallet=customer_wallet,
+        points=job_points,
+        transaction_type=TransactionType.PROVIDER_PAY,
+        job=job,
     )
 
     # Store the fee and provider earning on the job
     job.admin_fee_points = admin_fee_points
     job.provider_earning_points = provider_points
+
+    record_platform_fee(admin_fee_points, PlatformFeeSource.JOB_FEE, job=job)
 
     job.save(
         update_fields=[
@@ -375,7 +399,8 @@ def pay_provider_partial(job, accepted_offer, percentage):
     """
 
     if percentage <= 0 or percentage > 100:
-        raise ValidationError({"percentage": "Percentage must be between 1 and 100."})
+        raise ValidationError(
+            {"percentage": "Percentage must be between 1 and 100."})
 
     customer_wallet = PointWallet.objects.select_for_update().get(
         user=job.customer.user
@@ -392,7 +417,8 @@ def pay_provider_partial(job, accepted_offer, percentage):
 
     # Percentage of the original job amount allocated
     # to the provider before the admin fee.
-    provider_gross_points = int(job_points * Decimal(percentage) / Decimal(100))
+    provider_gross_points = int(
+        job_points * Decimal(percentage) / Decimal(100))
 
     # Admin fee is taken from the provider's allocated amount.
     admin_fee_points = int(provider_gross_points * ADMIN_FEE_RATE)
@@ -451,6 +477,8 @@ def pay_provider_partial(job, accepted_offer, percentage):
     # Store the actual amounts on the job.
     job.admin_fee_points = admin_fee_points
     job.provider_earning_points = provider_points
+
+    record_platform_fee(admin_fee_points, PlatformFeeSource.JOB_FEE, job=job)
 
     job.save(
         update_fields=[

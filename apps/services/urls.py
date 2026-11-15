@@ -1,5 +1,5 @@
 from django.urls import path, include
-from rest_framework.routers import DefaultRouter
+from rest_framework.routers import SimpleRouter
 
 from apps.services.views import (
     CategoryViewSet,
@@ -8,7 +8,7 @@ from apps.services.views import (
     MyServiceListView,
 )
 
-router = DefaultRouter()
+router = SimpleRouter()
 router.register("", CategoryViewSet, basename="category")
 
 urlpatterns = [

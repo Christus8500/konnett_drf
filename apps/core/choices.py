@@ -76,3 +76,7 @@ class EmailOutboxStatus(models.TextChoices):
     SENT = "sent", "Sent"
     FAILED = "failed", "Failed"
 
+
+class PlatformFeeSource(models.TextChoices):
+    PURCHASE_FEE = "purchase_fee", "Purchase fee"
+    JOB_FEE = "job_fee", "Job fee"
