@@ -172,11 +172,10 @@ def update_provider_verification_status(request, provider_id):
         verification.admin_comment = ""
         verification.provider.is_verified = True
 
-    verification.save(update_fields=["status", "admin_comment"])
+    verification.save(update_fields=["status", "admin_comment", "updated_at"])
 
-    verification.provider.save(update_fields=["is_verified"])
+    verification.provider.save(update_fields=["is_verified", "updated_at"])
 
-    # -- BACKGROUND TASK --
     # Queue email.
     queue_provider_verification_email(
         verification, verification_status, admin_comment=admin_comment

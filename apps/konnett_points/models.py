@@ -60,7 +60,8 @@ class PointPurchase(UUIDModel, TimeStampedModel):
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(
-                    points=models.F("admin_fee_points") + models.F("credited_points")
+                    points=models.F("admin_fee_points") +
+                    models.F("credited_points")
                 ),
                 name="purchase_points_equal_fee_plus_credited",
             ),

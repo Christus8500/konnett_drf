@@ -111,7 +111,7 @@ class JobRequest(UUIDModel, TimeStampedModel):
         return f"{self.title}, by {self.customer}"
 
 
-class JobRequestImage(UUIDModel):
+class JobRequestImage(UUIDModel, TimeStampedModel):
     job = models.ForeignKey(
         JobRequest, on_delete=models.CASCADE, related_name="job_request_images"
     )
@@ -121,7 +121,7 @@ class JobRequestImage(UUIDModel):
         return f"Image for {self.job}"
 
 
-class JobCompletionImage(UUIDModel):
+class JobCompletionImage(UUIDModel, TimeStampedModel):
     job = models.ForeignKey(
         JobRequest, on_delete=models.CASCADE, related_name="job_completion_images"
     )
@@ -184,7 +184,7 @@ class JobRequestOffer(UUIDModel, TimeStampedModel):
         return f"{self.provider} → {self.job}"
 
 
-class JobDispute(UUIDModel):
+class JobDispute(UUIDModel, TimeStampedModel):
     job = models.OneToOneField(
         JobRequest,
         on_delete=models.CASCADE,

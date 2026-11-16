@@ -219,7 +219,8 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
 
         # Notify customer
         transaction.on_commit(
-            lambda: create_job_created_notification(user=self.request.user, job=job)
+            lambda: create_job_created_notification(
+                user=self.request.user, job=job)
         )
 
     @transaction.atomic
@@ -250,7 +251,8 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
 
         # Notify customer of job update
         transaction.on_commit(
-            lambda: create_job_updated_notification(user=self.request.user, job=job)
+            lambda: create_job_updated_notification(
+                user=self.request.user, job=job)
         )
 
         return response
@@ -271,7 +273,7 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
         )
 
         job.status = JobRequestStatus.CANCELLED
-        job.save(update_fields=["status"])
+        job.save(update_fields=["status", "updated_at"])
 
         release_reserved_points(job, transaction_type=TransactionType.UNLOCK)
 
@@ -430,7 +432,8 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
         )
 
         if job.deadline is not None and job.deadline <= timezone.now():
-            raise ValidationError({"detail": "This job's deadline has passed."})
+            raise ValidationError(
+                {"detail": "This job's deadline has passed."})
 
         provider = request.user.provider_profile
 
@@ -448,7 +451,8 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
         elif existing.status == JobOfferStatus.WITHDRAWN:
             # Re-offer: reuse the withdrawn row (the unique constraint allows only one per provider).
             existing.status = JobOfferStatus.PENDING
-            existing.save(update_fields=["status"])  # the signal moves the job to OPEN
+            # the signal moves the job to OPEN
+            existing.save(update_fields=["status", "updated_at"])
             offer = existing
             data = self.get_serializer(existing).data
         else:
@@ -458,7 +462,8 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
             )
 
         transaction.on_commit(
-            lambda: create_job_new_offer_notification(user=job.customer.user, job=job)
+            lambda: create_job_new_offer_notification(
+                user=job.customer.user, job=job)
         )
 
         return Response(data, status=status.HTTP_201_CREATED)
@@ -500,11 +505,14 @@ class JobOfferAcceptView(JobRequestMixin, ProviderMixin, APIView):
         )
 
         self.check_job_owner(job)
-        self.ensure_job_is_open(job, "Offers can only be managed while the job is open")
-        self.ensure_offer_is_pending(offer, "This offer has already been processed.")
+        self.ensure_job_is_open(
+            job, "Offers can only be managed while the job is open")
+        self.ensure_offer_is_pending(
+            offer, "This offer has already been processed.")
 
         if job.deadline is not None and job.deadline <= timezone.now():
-            raise ValidationError({"detail": "This job's deadline has passed."})
+            raise ValidationError(
+                {"detail": "This job's deadline has passed."})
 
         # Offers about to be rejected (captured BEFORE the update).
         other_offers = list(
@@ -514,14 +522,14 @@ class JobOfferAcceptView(JobRequestMixin, ProviderMixin, APIView):
         )
 
         offer.status = JobOfferStatus.ACCEPTED
-        offer.save(update_fields=["status"])
+        offer.save(update_fields=["status", "updated_at"])
 
         JobRequestOffer.objects.filter(pk__in=[o.pk for o in other_offers]).update(
             status=JobOfferStatus.REJECTED
         )
 
         job.status = JobRequestStatus.IN_PROGRESS
-        job.save(update_fields=["status"])
+        job.save(update_fields=["status", "updated_at"])
 
         transaction.on_commit(
             lambda: create_job_offer_accepted_notification(
@@ -576,11 +584,12 @@ class JobOfferRejectView(JobRequestMixin, ProviderMixin, APIView):
         self.ensure_job_is_open(
             job, "You can only reject offers while the job is open."
         )
-        self.ensure_offer_is_pending(offer, "This offer has already been processed.")
+        self.ensure_offer_is_pending(
+            offer, "This offer has already been processed.")
 
         offer.status = JobOfferStatus.REJECTED
         offer.save(
-            update_fields=["status"]
+            update_fields=["status", "updated_at"]
         )  # the update_job_status_on_offer_change signal moves the job to PENDING if none are left
 
         transaction.on_commit(
@@ -625,12 +634,14 @@ class JobOfferWithdrawView(ProviderMixin, JobRequestMixin, APIView):
         )
 
         self.check_offer_owner(offer)
-        self.ensure_job_is_open(job, "You can only withdraw offers from open jobs.")
-        self.ensure_offer_is_pending(offer, "Only pending offers can be withdrawn.")
+        self.ensure_job_is_open(
+            job, "You can only withdraw offers from open jobs.")
+        self.ensure_offer_is_pending(
+            offer, "Only pending offers can be withdrawn.")
 
         # The post_save signal moves the job back to PENDING if this was the last pending offer.
         offer.status = JobOfferStatus.WITHDRAWN
-        offer.save(update_fields=["status"])
+        offer.save(update_fields=["status", "updated_at"])
 
         return Response({"detail": "Offer withdrawn."}, status=status.HTTP_200_OK)
 
@@ -739,7 +750,7 @@ class JobRequestCompletionView(JobRequestMixin, ProviderMixin, APIView):
             )
 
         job.status = JobRequestStatus.AWAITING_CONFIRMATION
-        job.save(update_fields=["status"])
+        job.save(update_fields=["status", "updated_at"])
 
         # Notify job owner of a completion request
         transaction.on_commit(
@@ -817,6 +828,7 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
                 "average_rating",
                 "ratings_count",
                 "completed_jobs",
+                "updated_at",
             ]
         )
         # completed_jobs is now an F() expression in memory. Call
@@ -824,7 +836,7 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
 
         # JobRequest.save() sets completed_at when the status becomes COMPLETED.
         job.status = JobRequestStatus.COMPLETED
-        job.save(update_fields=["status", "completed_at"])
+        job.save(update_fields=["status", "completed_at", "updated_at"])
 
         pay_provider(job, offer)
 
@@ -917,16 +929,18 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
 
         # Mark the job as disputed.
         job.status = JobRequestStatus.DISPUTED
-        job.save(update_fields=["status"])
+        job.save(update_fields=["status", "updated_at"])
 
         # Notify the provider after the transaction commits.
         provider_user = accepted_offer.provider.user
         transaction.on_commit(
-            lambda: create_dispute_opened_notification(user=provider_user, job=job)
+            lambda: create_dispute_opened_notification(
+                user=provider_user, job=job)
         )
 
         # Notify administrators after the transaction commits.
-        admin_users = list(User.objects.filter(role=UserRole.ADMIN, is_active=True))
+        admin_users = list(User.objects.filter(
+            role=UserRole.ADMIN, is_active=True))
         for admin in admin_users:
             transaction.on_commit(
                 lambda user=admin: create_dispute_opened_admin_notification(
@@ -979,9 +993,11 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
 
         job = dispute.job
         if job.status != JobRequestStatus.DISPUTED:
-            raise ValidationError({"detail": "This job is not in a disputed state."})
+            raise ValidationError(
+                {"detail": "This job is not in a disputed state."})
 
-        serializer = self.get_serializer(dispute, data=request.data, partial=True)
+        serializer = self.get_serializer(
+            dispute, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
 
         decision = serializer.validated_data.get("decision")
@@ -989,7 +1005,8 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
             JobDisputeDecision.REFUND_POINTS,
             JobDisputeDecision.RELEASE_POINTS,
         ):
-            raise ValidationError({"decision": "A valid decision is required."})
+            raise ValidationError(
+                {"decision": "A valid decision is required."})
 
         offer = get_object_or_404(
             JobRequestOffer.objects.select_related("provider__user"),
@@ -1004,7 +1021,8 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
 
         if decision == JobDisputeDecision.REFUND_POINTS:
             job.status = JobRequestStatus.CANCELLED
-            release_reserved_points(job, transaction_type=TransactionType.REFUND)
+            release_reserved_points(
+                job, transaction_type=TransactionType.REFUND)
 
             transaction.on_commit(
                 lambda: create_dispute_refunded_customer_notification(
@@ -1023,7 +1041,7 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
             pay_provider(job, offer)
 
             offer.provider.completed_jobs = F("completed_jobs") + 1
-            offer.provider.save(update_fields=["completed_jobs"])
+            offer.provider.save(update_fields=["completed_jobs", "updated_at"])
             # Call offer.provider.refresh_from_db(fields=["completed_jobs"]) first,
             # if you need the value of completed_jobs immediately after saving.
 
@@ -1038,6 +1056,6 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
                 )
             )
 
-        job.save(update_fields=["status", "completed_at"])
+        job.save(update_fields=["status", "completed_at", "updated_at"])
 
         return Response(serializer.data, status=status.HTTP_200_OK)

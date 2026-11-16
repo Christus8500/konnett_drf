@@ -73,7 +73,8 @@ class UserViewSet(
         queryset = self.get_queryset()
         serializer = self.get_serializer(queryset, many=True)
 
-        set_cache(cache_key, serializer.data, timeout=settings.BIG_CACHE_TIMEOUT)
+        set_cache(cache_key, serializer.data,
+                  timeout=settings.BIG_CACHE_TIMEOUT)
 
         return Response(serializer.data)
 
@@ -226,7 +227,7 @@ class VerifyEmailView(APIView):
 
         user.email_verified = True
 
-        user.save(update_fields=["email_verified"])
+        user.save(update_fields=["email_verified", "updated_at"])
 
         return Response(
             {"message": "Email verified successfully."},
@@ -316,7 +317,8 @@ class EmailChangeRequestView(APIView):
         new_email = serializer.validated_data["new_email"]
 
         bucket = int(time.time() // 300)
-        email_hash = hashlib.sha256(new_email.lower().encode()).hexdigest()[:16]
+        email_hash = hashlib.sha256(
+            new_email.lower().encode()).hexdigest()[:16]
         key_suffix = f"{user.pk}:{email_hash}:{bucket}"
 
         with transaction.atomic():
