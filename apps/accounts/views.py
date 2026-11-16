@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import time
 
 from django.conf import settings
@@ -9,18 +10,28 @@ from django.utils.http import urlsafe_base64_decode
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 from rest_framework import mixins, viewsets, generics, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from rest_framework.throttling import ScopedRateThrottle
 
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    extend_schema_view,
+)
 
-from apps.core.utils import get_cache, set_cache
+from apps.core.utils import FORBIDDEN, THROTTLED, UNAUTHORIZED, VALIDATION_ERROR, get_cache, set_cache
 
 from apps.accounts.serializers import (
+    ErrorResponseSerializer,
     LoginResponseSerializer,
+    MessageResponseSerializer,
+    RegisterResponseSerializer,
     RegisterSerializer,
     LoginSerializer,
     UserSerializer,
@@ -33,6 +44,14 @@ from apps.accounts.models import User
 
 from apps.mails.services import create_mailbox_message, queue_email
 from apps.mails.tasks import process_email_outbox
+
+logger = logging.getLogger(__name__)
+
+
+def _client_ip(request):
+    # PythonAnywhere's load balancer puts the real client IP in X-Real-IP.
+    # Falls back to REMOTE_ADDR for local development.
+    return request.META.get("HTTP_X_REAL_IP") or request.META.get("REMOTE_ADDR", "unknown")
 
 
 # Create your views here.
@@ -52,6 +71,38 @@ def _queue_password_reset(user):
 
 
 # UserViewSet: A viewset that allows listing, retrieving, updating, and deleting user instances. Only accessible by admin users.
+@extend_schema_view(
+    list=extend_schema(
+        tags=["Users (admin)"],
+        summary="List all users",
+        description="Returns all users. Cached. Admin only.",
+        responses={
+            200: UserSerializer(many=True),
+            401: UNAUTHORIZED,
+            403: FORBIDDEN,
+        },
+    ),
+    retrieve=extend_schema(
+        tags=["Users (admin)"],
+        summary="Retrieve a user",
+        responses={
+            200: UserSerializer,
+            401: UNAUTHORIZED,
+            403: FORBIDDEN,
+            404: OpenApiResponse(description="User not found."),
+        },
+    ),
+    destroy=extend_schema(
+        tags=["Users (admin)"],
+        summary="Delete a user",
+        responses={
+            204: OpenApiResponse(description="User deleted."),
+            401: UNAUTHORIZED,
+            403: FORBIDDEN,
+            404: OpenApiResponse(description="User not found."),
+        },
+    ),
+)
 class UserViewSet(
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
@@ -68,6 +119,7 @@ class UserViewSet(
 
         cached_data = get_cache(cache_key)
         if cached_data is not None:
+            logger.debug("Admin user list served from cache")
             return Response(cached_data)
 
         queryset = self.get_queryset()
@@ -78,8 +130,32 @@ class UserViewSet(
 
         return Response(serializer.data)
 
+    def perform_destroy(self, instance):
+        # Audit trail: who deleted whom.
+        logger.warning(
+            "User deleted by admin admin_id=%s deleted_user_id=%s",
+            self.request.user.pk,
+            instance.pk,
+        )
+        super().perform_destroy(instance)
 
-# RegisterView: A view for handling user registration requests. Only accessible by any user.
+
+# RegisterView: A view for handling user registration requests. Accessible by any user.
+# NOTE: the decorator is on the class (not on create()) because spectacular
+# resolves the HTTP-method handler (post), and create() is only called by it.
+@extend_schema(
+    tags=["Auth"],
+    summary="Register a new user",
+    description=(
+        "Creates a user, returns JWT tokens, and queues an account "
+        "verification email."
+    ),
+    request=RegisterSerializer,
+    responses={
+        201: RegisterResponseSerializer,
+        400: VALIDATION_ERROR,
+    },
+)
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
@@ -112,6 +188,13 @@ class RegisterView(generics.CreateAPIView):
         transaction.on_commit(
             lambda email_id=email.pk: process_email_outbox.delay(email_id)
         )
+        transaction.on_commit(
+            lambda: logger.info(
+                "User registered user_id=%s verification_outbox_id=%s",
+                user.pk,
+                email.pk,
+            )
+        )
 
         return Response(
             {
@@ -130,16 +213,29 @@ class LoginView(APIView):
 
     # Overriding post() to handle user login. It validates the incoming data, authenticates the user, generates JWT tokens for the authenticated user, and returns a response with the user's data and tokens.
     @extend_schema(
+        tags=["Auth"],
+        summary="Log in",
+        description="Authenticates with credentials and returns JWT tokens.",
         request=LoginSerializer,
-        responses=LoginResponseSerializer,
+        responses={
+            200: LoginResponseSerializer,
+            400: OpenApiResponse(description="Invalid credentials or malformed request."),
+        },
     )
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except ValidationError:
+            # Don't log the submitted email/password.
+            logger.warning("Failed login attempt ip=%s", _client_ip(request))
+            raise
 
         user = serializer.validated_data["user"]
 
         refresh = RefreshToken.for_user(user)
+
+        logger.info("User logged in user_id=%s", user.pk)
 
         return Response(
             {
@@ -152,6 +248,12 @@ class LoginView(APIView):
 
 
 # UserView: A view for retrieving the currently authenticated user's information. Only accessible by authenticated users.
+@extend_schema(
+    tags=["Users"],
+    summary="Get current user",
+    description="Returns the currently authenticated user. Cached.",
+    responses={200: UserSerializer, 401: UNAUTHORIZED},
+)
 class UserView(generics.RetrieveAPIView):
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]
@@ -166,6 +268,7 @@ class UserView(generics.RetrieveAPIView):
         cached_data = get_cache(cache_key)
 
         if cached_data is not None:
+            logger.debug("Current user served from cache user_id=%s", user_id)
             return Response(cached_data)
 
         instance = self.get_object()
@@ -182,12 +285,42 @@ class UserView(generics.RetrieveAPIView):
 
 class VerifyEmailView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "email_verification"
 
+    @extend_schema(
+        tags=["Auth"],
+        summary="Verify email address",
+        description="Confirms a user's email using the link sent after registration.",
+        parameters=[
+            OpenApiParameter(
+                name="uid",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                required=True,
+                description="URL-safe base64 encoded user ID.",
+            ),
+            OpenApiParameter(
+                name="token",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                required=True,
+                description="Verification token.",
+            ),
+        ],
+        responses={
+            200: MessageResponseSerializer,
+            400: ErrorResponseSerializer,
+        },
+    )
     def get(self, request):
         uid = request.query_params.get("uid")
         token = request.query_params.get("token")
 
         if not uid or not token:
+            logger.warning(
+                "Email verification missing params ip=%s", _client_ip(request)
+            )
             return Response(
                 {"error": "Invalid verification link."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -205,6 +338,10 @@ class VerifyEmailView(APIView):
             DjangoValidationError,
             User.DoesNotExist,
         ):
+            logger.warning(
+                "Email verification with unknown/malformed uid ip=%s",
+                _client_ip(request),
+            )
             return Response(
                 {"error": "Invalid verification link."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -220,6 +357,11 @@ class VerifyEmailView(APIView):
             user,
             token,
         ):
+            logger.warning(
+                "Email verification with invalid/expired token user_id=%s ip=%s",
+                user.pk,
+                _client_ip(request),
+            )
             return Response(
                 {"error": "Invalid or expired verification link."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -228,6 +370,8 @@ class VerifyEmailView(APIView):
         user.email_verified = True
 
         user.save(update_fields=["email_verified", "updated_at"])
+
+        logger.info("Email verified user_id=%s", user.pk)
 
         return Response(
             {"message": "Email verified successfully."},
@@ -241,7 +385,20 @@ class PasswordResetRequestView(APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "password_reset"
 
-    @extend_schema(request=PasswordResetRequestSerializer, responses={200: None})
+    @extend_schema(
+        tags=["Password"],
+        summary="Request a password reset email",
+        description=(
+            "Always returns 200 whether or not the account exists, so that "
+            "registered emails cannot be enumerated."
+        ),
+        request=PasswordResetRequestSerializer,
+        responses={
+            200: MessageResponseSerializer,
+            400: VALIDATION_ERROR,
+            429: THROTTLED,
+        },
+    )
     def post(self, request):
         serializer = PasswordResetRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -251,6 +408,13 @@ class PasswordResetRequestView(APIView):
 
         if user:
             _queue_password_reset(user)
+        else:
+            # Server-side only; the client response is identical either way.
+            # Email intentionally not logged.
+            logger.info(
+                "Password reset requested for unknown/inactive account ip=%s",
+                _client_ip(request),
+            )
 
         # Same response whether or not the account exists, so emails can't be enumerated.
         return Response(
@@ -268,7 +432,17 @@ class AuthenticatedPasswordResetView(APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "password_reset"
 
-    @extend_schema(request=None, responses={200: None})
+    @extend_schema(
+        tags=["Password"],
+        summary="Request a password reset email (authenticated)",
+        description="Sends a reset link to the authenticated user's email. No request body.",
+        request=None,
+        responses={
+            200: MessageResponseSerializer,
+            401: UNAUTHORIZED,
+            429: THROTTLED,
+        },
+    )
     def post(self, request):
         _queue_password_reset(request.user)
         return Response(
@@ -282,13 +456,30 @@ class PasswordResetConfirmView(APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "password_reset"
 
-    @extend_schema(request=PasswordResetConfirmSerializer, responses={200: None})
+    @extend_schema(
+        tags=["Password"],
+        summary="Confirm a password reset",
+        description="Sets a new password using the uid/token from the reset email.",
+        request=PasswordResetConfirmSerializer,
+        responses={
+            200: MessageResponseSerializer,
+            400: OpenApiResponse(description="Invalid/expired token or weak password."),
+            429: THROTTLED,
+        },
+    )
     def post(self, request):
         serializer = PasswordResetConfirmSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except ValidationError:
+            logger.warning(
+                "Password reset confirm failed validation ip=%s",
+                _client_ip(request),
+            )
+            raise
         user = serializer.save()
 
-        # Optional: notify the user in their mailbox.
+        # Notify the user in their mailbox.
         create_mailbox_message(
             user=user,
             subject="Password changed",
@@ -307,7 +498,21 @@ class EmailChangeRequestView(APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "email_change"
 
-    @extend_schema(request=EmailChangeRequestSerializer, responses={200: None})
+    @extend_schema(
+        tags=["Email change"],
+        summary="Request an email address change",
+        description=(
+            "Sends a confirmation link to the new address and a notice to "
+            "the current address."
+        ),
+        request=EmailChangeRequestSerializer,
+        responses={
+            200: MessageResponseSerializer,
+            400: VALIDATION_ERROR,
+            401: UNAUTHORIZED,
+            429: THROTTLED,
+        },
+    )
     def post(self, request):
         serializer = EmailChangeRequestSerializer(
             data=request.data, context={"request": request}
@@ -339,6 +544,18 @@ class EmailChangeRequestView(APIView):
                     lambda eid=mail_obj.pk: process_email_outbox.delay(eid)
                 )
 
+        # Only the hash of the new address is logged, never the address itself.
+        logger.info(
+            "Email change requested user_id=%s new_email_hash=%s "
+            "confirm_outbox_id=%s (created=%s) notice_outbox_id=%s (created=%s)",
+            user.pk,
+            email_hash,
+            confirm_mail.pk,
+            confirm_mail.created_at,
+            notice_mail.pk,
+            notice_mail.created_at,
+        )
+
         return Response(
             {"message": "A confirmation link was sent to your new email address."},
             status=status.HTTP_200_OK,
@@ -350,17 +567,44 @@ class EmailChangeConfirmView(APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "email_change"
 
-    @extend_schema(request=EmailChangeConfirmSerializer, responses={200: None})
+    @extend_schema(
+        tags=["Email change"],
+        summary="Confirm an email address change",
+        description="Applies the pending email change using the token from the confirmation email.",
+        request=EmailChangeConfirmSerializer,
+        responses={
+            200: MessageResponseSerializer,
+            400: OpenApiResponse(
+                description=(
+                    "Invalid/expired token (field errors), or the email is "
+                    "already taken (`{\"error\": \"Email already exists.\"}`)."
+                )
+            ),
+            429: THROTTLED,
+        },
+    )
     def post(self, request):
         serializer = EmailChangeConfirmSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except ValidationError:
+            logger.warning(
+                "Email change confirm failed validation ip=%s",
+                _client_ip(request),
+            )
+            raise
         try:
             serializer.save()
         except IntegrityError:  # race with another signup using the same email
+            logger.warning(
+                "Email change confirm hit IntegrityError (email already taken) ip=%s",
+                _client_ip(request),
+            )
             return Response(
                 {"error": "Email already exists."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        logger.info("Email change confirmed ip=%s", _client_ip(request))
         return Response(
             {"message": "Email updated successfully."},
             status=status.HTTP_200_OK,

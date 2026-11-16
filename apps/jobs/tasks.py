@@ -22,7 +22,8 @@ def expire_overdue_jobs():
                 JobRequestStatus.IN_PROGRESS,
                 JobRequestStatus.AWAITING_CONFIRMATION,
             ],
-        ).values_list("id", flat=True)
+        ).order_by("deadline")
+        .values_list("id", flat=True)[:500]
     )
 
     processed = failed = 0
@@ -35,4 +36,3 @@ def expire_overdue_jobs():
             logger.exception("Failed to expire job %s", job_id)
 
     return f"{processed} processed, {failed} failed."
-    

@@ -12,6 +12,8 @@ from django.utils import timezone
 from django.core.cache import cache
 from django.db.models import Avg
 
+from drf_spectacular.utils import OpenApiResponse
+
 
 def generate_reference(prefix="KNT"):
     """
@@ -130,7 +132,6 @@ def unique_filename(filename):
     return f"{uuid.uuid4().hex}{extension}"
 
 
-
 def mask_account_number(account_number):
     """'0123456789' -> '******6789'"""
     if not account_number:
@@ -157,3 +158,14 @@ def versioned_cache_key(scope, owner_id, query_params):
     raw = repr(sorted((k, tuple(v)) for k, v in query_params.lists()))
     digest = hashlib.sha256(raw.encode()).hexdigest()[:20]
     return f"{scope}:{owner_id}:v{cache_version(scope, owner_id)}:{digest}"
+
+
+# ---------- Reusable documented responses ----------
+VALIDATION_ERROR = OpenApiResponse(
+    description="Validation error. Body maps field names to lists of error messages."
+)
+UNAUTHORIZED = OpenApiResponse(
+    description="Authentication credentials were not provided or are invalid."
+)
+FORBIDDEN = OpenApiResponse(description="You do not have permission to perform this action.")
+THROTTLED = OpenApiResponse(description="Too many requests. Try again later.")

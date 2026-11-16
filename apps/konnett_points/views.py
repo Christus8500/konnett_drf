@@ -20,17 +20,20 @@ from rest_framework.throttling import UserRateThrottle, ScopedRateThrottle
 from rest_framework.decorators import action
 
 from drf_spectacular.types import OpenApiTypes
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiResponse, extend_schema
 
 from apps.core.utils import (
     generate_reference,
     get_cache,
     set_cache,
     versioned_cache_key,
+    FORBIDDEN, THROTTLED, UNAUTHORIZED
 )
 from apps.core.constants import WITHDRAWAL_REFERENCE_PREFIX
 from apps.core.choices import PlatformFeeSource, UserRole, PaymentStatus, TransactionType, WithdrawalStatus
 from apps.core.permissions import IsCustomer, IsVerifiedProvider
+
+from apps.accounts.bank_details import bank_cooldown_ends_at
 
 from apps.konnett_points.models import (
     PlatformFeeEntry,
@@ -422,6 +425,21 @@ class WithdrawalRequestListCreateView(
     def get(self, request, *args, **kwargs):
         return self.list(request, *args, **kwargs)
 
+    @extend_schema(
+        tags=["Withdrawals"],
+        summary="Request a withdrawal",
+        description="Locks the points and snapshots the account's bank details.",
+        request=WithdrawalRequestSerializer,
+        responses={
+            201: WithdrawalRequestSerializer,
+            400: OpenApiResponse(description=(
+                "Validation error: below minimum points, missing/invalid bank details, "
+                "bank details changed within the cooldown window, a request already "
+                "pending, or insufficient available points."
+            )),
+            401: UNAUTHORIZED, 403: FORBIDDEN, 429: THROTTLED,
+        },
+    )
     def post(self, request, *args, **kwargs):
         return self.create(request, *args, **kwargs)
 
@@ -448,6 +466,20 @@ class WithdrawalRequestListCreateView(
                 {
                     "bank_details": "Add valid bank details to your profile before requesting a withdrawal."
                 }
+            )
+
+        ends_at = bank_cooldown_ends_at(user)
+        if ends_at is not None:
+            logger.warning(
+                "Withdrawal blocked by bank-change cooldown user_id=%s ends_at=%s",
+                user.pk, ends_at.isoformat(),
+            )
+            raise ValidationError(
+                {"bank_details": (
+                    "You changed your bank details recently. Withdrawals are available "
+                    f"again after {ends_at:%d %b %Y, %H:%M} UTC."
+                )},
+                code="bank_cooldown",
             )
 
         # Locking the wallet also serialises this user's requests, so the

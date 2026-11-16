@@ -326,11 +326,13 @@ def pay_provider(job, accepted_offer):
     Provider:
         available_points -> increased
     """
-    ensure_unsettled(job)
 
     customer_user_id = job.customer.user_id
     provider_user_id = accepted_offer.provider.user_id
     wallets = lock_wallets(customer_user_id, provider_user_id)
+
+    ensure_unsettled(job)
+    
     customer_wallet = wallets[customer_user_id]
     provider_wallet = wallets[provider_user_id]
 
@@ -402,13 +404,14 @@ def pay_provider_partial(job, accepted_offer, percentage):
         raise ValidationError(
             {"percentage": "Percentage must be between 1 and 100."})
 
-    customer_wallet = PointWallet.objects.select_for_update().get(
-        user=job.customer.user
-    )
+    customer_user_id = job.customer.user_id
+    provider_user_id = accepted_offer.provider.user_id
+    wallets = lock_wallets(customer_user_id, provider_user_id)
 
-    provider_wallet = PointWallet.objects.select_for_update().get(
-        user=accepted_offer.provider.user
-    )
+    ensure_unsettled(job)
+
+    customer_wallet = wallets[customer_user_id]
+    provider_wallet = wallets[provider_user_id]
 
     job_points = job.points_amount
 

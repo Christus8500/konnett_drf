@@ -47,6 +47,7 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel, UUIDModel):
     )
     account_name = models.CharField(max_length=255, blank=True, default="")
     bank_name = models.CharField(max_length=255, blank=True, default="")
+    bank_details_changed_at = models.DateTimeField(null=True, blank=True)
 
     # Custom user manager for handling user creation and superuser creation
     objects = UserManager()

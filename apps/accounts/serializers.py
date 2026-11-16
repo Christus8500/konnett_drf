@@ -196,7 +196,8 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 # ---------- Email change ----------
 class EmailChangeRequestSerializer(serializers.Serializer):
     new_email = serializers.EmailField()
-    password = serializers.CharField(write_only=True, style={"input_type": "password"})
+    password = serializers.CharField(
+        write_only=True, style={"input_type": "password"})
 
     def validate(self, attrs):
         user = self.context["request"].user
@@ -204,13 +205,15 @@ class EmailChangeRequestSerializer(serializers.Serializer):
         new_email = User.objects.normalize_email(attrs["new_email"].strip())
 
         if not user.check_password(attrs["password"]):
-            raise serializers.ValidationError({"password": "Incorrect password."})
+            raise serializers.ValidationError(
+                {"password": "Incorrect password."})
         if new_email.lower() == user.email.lower():
             raise serializers.ValidationError(
                 {"new_email": "This is already your email."}
             )
         if User.objects.filter(email__iexact=new_email).exists():
-            raise serializers.ValidationError({"new_email": "Email already exists."})
+            raise serializers.ValidationError(
+                {"new_email": "Email already exists."})
 
         attrs["new_email"] = new_email
         return attrs
@@ -253,3 +256,21 @@ class EmailChangeConfirmSerializer(serializers.Serializer):
             BlacklistedToken.objects.get_or_create(token=t)
 
         return user
+
+
+# ---------- Response serializers (documentation only) ----------
+# These exist purely so drf-spectacular can describe response bodies.
+# Consider moving them to apps/accounts/serializers.py.
+class MessageResponseSerializer(serializers.Serializer):
+    message = serializers.CharField()
+
+
+class ErrorResponseSerializer(serializers.Serializer):
+    error = serializers.CharField()
+
+
+class RegisterResponseSerializer(serializers.Serializer):
+    message = serializers.CharField()
+    user = UserSerializer()
+    refresh = serializers.CharField()
+    access = serializers.CharField()

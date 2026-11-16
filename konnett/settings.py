@@ -10,15 +10,15 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+from celery.schedules import crontab
+import os
+from dotenv import load_dotenv
 from pathlib import Path
 from datetime import timedelta
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-from dotenv import load_dotenv
-import os
-from celery.schedules import crontab
 
 load_dotenv()
 
@@ -142,18 +142,25 @@ CELERY_TIMEZONE = "UTC"
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 min hard limit per task
 
-# TODO: 
-# Check if this beat schedule is correct 
+# TODO:
+# Check if this beat schedule is correct
 # Or maybe you necessarily need this
 # CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 CELERY_BEAT_SCHEDULE = {
     "check-pending-emails-every-minute": {
-        "task": "apps.konnett_points.tasks.process_pending_emails",
+        "task": "apps.mails.tasks.process_pending_emails",
         "schedule": crontab(minute="*"),
+        "options": {"expires": 50},
     },
     "expire-overdue-jobs-every-minute": {
         "task": "apps.jobs.tasks.expire_overdue_jobs",
-        "schedule": crontab(),
+        "schedule": crontab(minute="*"),
+        "options": {"expires": 50},
+    },
+    "purge-old-outbox-emails-daily": {
+        "task": "apps.mails.tasks.purge_old_outbox_emails",
+        "schedule": crontab(hour=3, minute=15),
+        "options": {"expires": 3600},
     },
 }
 
@@ -182,17 +189,30 @@ EMAIL_TIMEOUT = 10
 
 
 # --- LOGGING ---
+# Configure logging to write logs to a file. Adjust the filename and level as needed.
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
-    "handlers": {"console": {"class": "logging.StreamHandler"}},
-    "loggers": {"apps": {"handlers": ["console"], "level": "INFO"}},
+    "formatters": {
+        "standard": {"format": "%(asctime)s %(levelname)s %(name)s %(message)s"},
+    },
+    "handlers": {
+        "file": {
+            "class": "logging.FileHandler",
+            "filename": "/home/YOUR_USERNAME/logs/app.log",
+            "formatter": "standard",
+        },
+    },
+    "loggers": {
+        "apps": {"handlers": ["file"], "level": "INFO"},
+    },
 }
 
 
 # -- WEBHOOK ---
 PAYMENT_WEBHOOK_SECRET = os.getenv("PAYMENT_WEBHOOK_SECRET")
-PAYMENT_WEBHOOK_SIGNATURE_HEADER = "x-signature"  # use your provider's header name
+# use your provider's header name
+PAYMENT_WEBHOOK_SIGNATURE_HEADER = "x-signature"
 
 
 # Password validation
@@ -241,14 +261,17 @@ MEDIA_ROOT = BASE_DIR / "media"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 PASSWORD_RESET_TIMEOUT = 60 * 60 * 24
-# `PASSWORD_RESET_TIMEOUT` is global. Django's default is 3 days. 
-# 24 hours is a reasonable compromise because email verification link shares the same setting. 
+# `PASSWORD_RESET_TIMEOUT` is global. Django's default is 3 days.
+# 24 hours is a reasonable compromise because email verification link shares the same setting.
 # Lowering it shortens verification links too.
 EMAIL_CHANGE_TIMEOUT = 60 * 60 * 24    # seconds; used by our own signed token
 
 # Dedicated salt, so rotating SECRET_KEY doesn't change every reviewer label.
 # Generate once, keep it in your environment, and don't change it afterwards.
 REVIEWER_LABEL_SALT = os.getenv("REVIEWER_LABEL_SALT")
+
+BANK_CHANGE_COOLDOWN_HOURS = 24
+BANK_COOLDOWN_ON_FIRST_SETUP = False
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
@@ -265,9 +288,10 @@ REST_FRAMEWORK = {
         "job_completion": "10/min",
         "disputes": "10/min",
         "withdrawals_create": "2/hour",
-        "point_purchase": "5/min",
+        "point_purchase": "2/min",
         "password_reset": "5/hour",
         "email_change": "5/hour",
+        "email_verification": "5/hour",
     },
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_FILTER_BACKENDS": [
@@ -279,6 +303,7 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 15,
     "EXCEPTION_HANDLER": "apps.core.exceptions.custom_exception_handler",
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "NUM_PROXIES": 1,
 }
 
 SIMPLE_JWT = {

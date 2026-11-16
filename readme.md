@@ -1,3 +1,5 @@
+## USE RAILWAY FOR EVERYTHING -> WEB APP, POSTGRES, CACHING, CELERY
+
 ## CELERY
 **After setting up celery and django celery beat, run:**
 

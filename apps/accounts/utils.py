@@ -144,18 +144,54 @@ def send_email_change_confirmation(user, new_email):
     )
 
 
-def send_email_change_notice(user, new_email):
+def send_email_change_notice(user, new_email, to_email):
     # Goes to the OLD address so the real owner can react.
     send_email(
         subject="Email change requested on your Konnett account",
-        to=user.email,
+        to=to_email,
         text_content=(
+            f"Hi {user.first_name or 'there'},\n\n"
             f"A request was made to change your account email to {new_email}.\n"
             "If this was not you, change your password immediately."
         ),
         html_content=(
+            f"<p>Hi {escape(user.first_name or 'there')},</p>"
             f"<p>A request was made to change your account email to "
             f"<strong>{escape(new_email)}</strong>.</p>"
             "<p>If this was not you, change your password immediately.</p>"
+        ),
+    )
+
+
+def send_bank_details_changed_email(user):
+    raw_first_name = user.first_name or "there"
+    safe_first_name = escape(raw_first_name)
+
+    # Read at send time, never stored in the outbox payload.
+    last4 = (user.account_number or "")[-4:]
+    text_account = f"The new account ends in {last4}.\n" if last4 else ""
+    html_account = (
+        f"<p>The new account ends in <strong>{escape(last4)}</strong>.</p>"
+        if last4
+        else ""
+    )
+
+    send_email(
+        subject="Bank details changed on your Konnett account",
+        to=user.email,
+        text_content=(
+            f"Hi {raw_first_name},\n\n"
+            "The bank details on your Konnett account were just changed.\n"
+            f"{text_account}\n"
+            "If you made this change, no action is needed.\n"
+            "If this was not you, change your password immediately and contact support."
+        ),
+        html_content=(
+            f"<p>Hi {safe_first_name},</p>"
+            "<p>The bank details on your Konnett account were just changed.</p>"
+            f"{html_account}"
+            "<p>If you made this change, no action is needed.</p>"
+            "<p>If this was not you, change your password immediately "
+            "and contact support.</p>"
         ),
     )

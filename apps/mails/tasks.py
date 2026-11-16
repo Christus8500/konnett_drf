@@ -1,10 +1,12 @@
 from datetime import timedelta
+import logging
 
 from celery import shared_task
 
 from django.db import transaction
 from django.utils import timezone
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ObjectDoesNotExist
 
 from apps.core.choices import EmailOutboxStatus
 
@@ -12,12 +14,24 @@ from apps.mails.models import EmailOutbox
 
 from apps.accounts.utils import (
     send_account_verification_email,
+    send_bank_details_changed_email,
     send_password_reset_email,
     send_email_change_confirmation,
     send_email_change_notice,
 )
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
+
+MAX_ATTEMPTS = 8
+BACKOFF_BASE_MINUTES = 1
+BACKOFF_CAP_MINUTES = 30
+PERMANENT_ERRORS = (ObjectDoesNotExist, KeyError, ValueError)
+
+def _retry_delay(attempts):
+    """attempts = number of failures so far (1-based)."""
+    minutes = min(BACKOFF_BASE_MINUTES * 2 ** (attempts - 1), BACKOFF_CAP_MINUTES)
+    return timedelta(minutes=minutes)
 
 
 def send_outbox_email(email):
@@ -64,11 +78,17 @@ def send_outbox_email(email):
 
     elif email.email_type == "email_change":
         user = User.objects.get(pk=email.payload["user_id"])
-        send_email_change_confirmation(user=user, new_email=email.payload["new_email"])
+        send_email_change_confirmation(
+            user=user, new_email=email.payload["new_email"])
 
     elif email.email_type == "email_change_notice":
         user = User.objects.get(pk=email.payload["user_id"])
-        send_email_change_notice(user=user, new_email=email.payload["new_email"])
+        send_email_change_notice(
+            user=user, new_email=email.payload["new_email"], to_email=email.recipient)
+
+    elif email.email_type == "bank_details_changed":
+        user = User.objects.get(pk=email.payload["user_id"])
+        send_bank_details_changed_email(user=user)
 
     elif email.email_type == "withdrawal_status":
         withdrawal = WithdrawalRequest.objects.select_related("user").get(
@@ -123,6 +143,7 @@ def process_email_outbox(email_outbox_id):
         send_outbox_email(email)
 
     except Exception as exc:
+        permanent = isinstance(exc, PERMANENT_ERRORS)
         with transaction.atomic():
             failed = (
                 EmailOutbox.objects.select_for_update()
@@ -133,23 +154,24 @@ def process_email_outbox(email_outbox_id):
             if failed is None:
                 return
             failed.attempts += 1
-            failed.last_error = str(exc)
+            failed.last_error = str(exc)[:2000]
             failed.processing_at = None
-            if failed.attempts >= 8:
+            if permanent or failed.attempts >= MAX_ATTEMPTS:
                 failed.status = EmailOutboxStatus.FAILED
+                logger.error(
+                    "Outbox email permanently failed outbox_id=%s type=%s attempts=%s error=%s",
+                    failed.pk, failed.email_type, failed.attempts, exc,
+                )
             else:
                 failed.status = EmailOutboxStatus.PENDING
-                delay = min(2 ** (failed.attempts - 1), 360)
-                failed.next_attempt_at = timezone.now() + timedelta(minutes=delay)
-            failed.save(
-                update_fields=[
-                    "attempts",
-                    "status",
-                    "last_error",
-                    "processing_at",
-                    "next_attempt_at",
-                ]
-            )
+                failed.next_attempt_at = timezone.now() + _retry_delay(failed.attempts)
+                logger.warning(
+                    "Outbox email attempt failed outbox_id=%s type=%s attempts=%s error=%s",
+                    failed.pk, failed.email_type, failed.attempts, exc,
+                )
+            failed.save(update_fields=[
+                "attempts", "status", "last_error", "processing_at", "next_attempt_at",
+            ])
 
         return
 
@@ -192,3 +214,27 @@ def process_pending_emails():
 
     for email_id in pending_ids:
         process_email_outbox.delay(email_id)
+
+
+@shared_task
+def purge_old_outbox_emails(sent_days=30, failed_days=90, batch_size=1000):
+    now = timezone.now()
+    total = 0
+
+    for status, days in (
+        (EmailOutboxStatus.SENT, sent_days),
+        (EmailOutboxStatus.FAILED, failed_days),
+    ):
+        cutoff = now - timedelta(days=days)
+        while True:
+            ids = list(
+                EmailOutbox.objects.filter(status=status, created_at__lt=cutoff)
+                .values_list("pk", flat=True)[:batch_size]
+            )
+            if not ids:
+                break
+            deleted, _ = EmailOutbox.objects.filter(pk__in=ids).delete()
+            total += deleted
+
+    logger.info("Purged %s old outbox emails", total)
+    return f"{total} deleted"
