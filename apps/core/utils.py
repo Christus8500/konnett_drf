@@ -167,5 +167,30 @@ VALIDATION_ERROR = OpenApiResponse(
 UNAUTHORIZED = OpenApiResponse(
     description="Authentication credentials were not provided or are invalid."
 )
-FORBIDDEN = OpenApiResponse(description="You do not have permission to perform this action.")
+FORBIDDEN = OpenApiResponse(
+    description="You do not have permission to perform this action.")
 THROTTLED = OpenApiResponse(description="Too many requests. Try again later.")
+
+
+def build_list_cache_key(prefix, request, allowed_params):
+    """Same results -> same key: only allowed params, sorted, then hashed."""
+    params = sorted(
+        (key, tuple(sorted(values)))
+        for key, values in request.query_params.lists()
+        if key in allowed_params
+    )
+    digest = hashlib.md5(repr(params).encode(),
+                         usedforsecurity=False).hexdigest()
+    return f"{prefix}:{digest}"
+
+
+def paginator_param_names(view):
+    """Query parameter names the view's paginator reads (e.g. page, page_size)."""
+    paginator = getattr(view, "paginator", None)
+    names = set()
+    if paginator is not None:
+        for attr in ("page_query_param", "page_size_query_param"):
+            name = getattr(paginator, attr, None)
+            if name:
+                names.add(name)
+    return names

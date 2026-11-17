@@ -232,7 +232,8 @@ class JobRequestReadSerializer(serializers.ModelSerializer):
 
 
 class JobRequestWriteSerializer(serializers.ModelSerializer):
-    category = serializers.PrimaryKeyRelatedField(queryset=Category.objects.all())
+    category = serializers.PrimaryKeyRelatedField(
+        queryset=Category.objects.all())
 
     primary_location = AddressSerializer()
 
@@ -263,7 +264,8 @@ class JobRequestWriteSerializer(serializers.ModelSerializer):
 
     def validate_deadline(self, value):
         if value and value <= timezone.now():
-            raise serializers.ValidationError("Deadline must be in the future.")
+            raise serializers.ValidationError(
+                "Deadline must be in the future.")
 
         return value
 
@@ -277,7 +279,8 @@ class JobRequestWriteSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         instance = self.instance  # None on create
 
-        category = attrs.get("category") or (instance.category if instance else None)
+        category = attrs.get("category") or (
+            instance.category if instance else None)
 
         # On a PATCH, fall back to what the job already has.
         if "secondary_location" in attrs:
@@ -324,7 +327,8 @@ class JobRequestWriteSerializer(serializers.ModelSerializer):
 
         if secondary_data:
             if instance.secondary_location is None:
-                instance.secondary_location = Address.objects.create(**secondary_data)
+                instance.secondary_location = Address.objects.create(
+                    **secondary_data)
             else:
                 for field, value in secondary_data.items():
                     setattr(instance.secondary_location, field, value)
@@ -349,7 +353,8 @@ class JobRequestWriteSerializer(serializers.ModelSerializer):
         secondary_location = None
 
         if secondary_location_data:
-            secondary_location = Address.objects.create(**secondary_location_data)
+            secondary_location = Address.objects.create(
+                **secondary_location_data)
 
         return JobRequest.objects.create(
             primary_location=primary_location,
@@ -384,3 +389,16 @@ class AdminJobDisputeSerializer(serializers.ModelSerializer):
             "customer",
             "customer_reason",
         ]
+
+
+# ---------- Documentation-only serializers and reusable pieces ----------
+class JobsDetailResponseSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+
+
+class JobCompletionConfirmedResponseSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+    rating = serializers.IntegerField()
+    comment = serializers.CharField(allow_blank=True)
+    provider_average_rating = serializers.FloatField()
+    provider_ratings_count = serializers.IntegerField()

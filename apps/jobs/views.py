@@ -1,4 +1,4 @@
-from functools import partial
+import logging
 
 from django.db import transaction
 from django.db.models import F, Q, Count, Prefetch, Avg
@@ -20,7 +20,13 @@ from rest_framework.throttling import (
     AnonRateThrottle,
 )
 
-from drf_spectacular.utils import extend_schema, OpenApiResponse
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    extend_schema_view,
+)
 
 from apps.core.permissions import (
     IsCustomer,
@@ -36,6 +42,7 @@ from apps.core.choices import (
     UserRole,
 )
 from apps.core.constants import MAX_JOB_COMPLETION_IMAGES, MAX_JOB_REQUEST_IMAGES
+from apps.core.utils import FORBIDDEN, THROTTLED, UNAUTHORIZED
 
 from apps.accounts.models import User
 
@@ -49,6 +56,7 @@ from apps.jobs.models import (
 )
 from apps.jobs.mixins import JobRequestMixin, ProviderMixin
 from apps.jobs.serializers import (
+    JobCompletionConfirmedResponseSerializer,
     JobRequestReadSerializer,
     JobRequestWriteSerializer,
     JobRequestImageSerializer,
@@ -57,6 +65,7 @@ from apps.jobs.serializers import (
     JobRequestOfferSerializer,
     JobDisputeSerializer,
     AdminJobDisputeSerializer,
+    JobsDetailResponseSerializer,
     ProviderRatingSerializer,
 )
 from apps.jobs.filters import JobFilter
@@ -84,13 +93,129 @@ from apps.konnett_points.utils import (
     release_reserved_points,
 )
 
-from apps.mails.services import create_mailbox_message
-
 from apps.providers.models import ProviderProfile
+ 
+logger = logging.getLogger(__name__)
+
+def _detail(description):
+    return OpenApiResponse(response=JobsDetailResponseSerializer, description=description)
+
+
+def _path_uuid(name, description):
+    return OpenApiParameter(
+        name=name,
+        type=OpenApiTypes.UUID,
+        location=OpenApiParameter.PATH,
+        description=description,
+    )
+
+
+
+JOB_ID = _path_uuid("pk", "Job ID.")
+OFFER_ID = _path_uuid("pk", "Offer ID.")
+IMAGE_ID = _path_uuid("pk", "Image ID.")
+PROVIDER_ID = _path_uuid("provider_id", "Provider profile ID.")
+
+JOB_NOT_FOUND = OpenApiResponse(description="Job not found.")
+OFFER_NOT_FOUND = OpenApiResponse(description="Offer not found.")
+# The mixins raise ValidationError("message") with a bare string, which DRF
+# renders as a JSON ARRAY of messages, not {"detail": ...}. Explicit
+# Response/dict errors in the views use {"detail": "..."}.
+STATE_ERROR_NOTE = (
+    ' State errors (wrong job/offer status) are returned as a JSON array of '
+    'messages, e.g. ["This job is not open."]; other failures use {"detail": "..."}.'
+)
+BAD_STATE = OpenApiResponse(
+    description="The job or offer is not in a state that allows this action." + STATE_ERROR_NOTE
+)
+NOT_ALLOWED = OpenApiResponse(
+    response=JobsDetailResponseSerializer,
+    description=(
+        "Wrong role, or you do not own this job, offer or dispute "
+        '(e.g. {"detail": "You do not own this job."}).'
+    ),
+)
 
 # Create your views here.
 
 
+
+@extend_schema_view(
+    list=extend_schema(
+        tags=["Jobs"],
+        summary="List jobs",
+        description=(
+            "Staff see all jobs. Customers see their own. Verified providers see "
+            "pending and open jobs plus the jobs they were accepted for. Supports "
+            "the filter query parameters, `search` (title, description) and "
+            "`ordering` (`created_at`, `points_amount`). Paginated."
+        ),
+        responses={
+            200: JobRequestReadSerializer,
+            401: UNAUTHORIZED,
+            403: NOT_ALLOWED,
+            429: THROTTLED,
+        },
+    ),
+    retrieve=extend_schema(
+        tags=["Jobs"],
+        summary="Get a job",
+        responses={
+            200: JobRequestReadSerializer,
+            401: UNAUTHORIZED,
+            403: NOT_ALLOWED,
+            404: JOB_NOT_FOUND,
+            429: THROTTLED,
+        },
+    ),
+    create=extend_schema(
+        tags=["Jobs"],
+        summary="Create a job (customers)",
+        description=(
+            "multipart/form-data, with optional `images`. Reserves the job's points "
+            "from the customer's wallet."
+        ),
+        request=JobRequestWriteSerializer,
+        responses={
+            201: JobRequestWriteSerializer,
+            400: OpenApiResponse(
+                description="Validation error, e.g. insufficient available points."
+            ),
+            401: UNAUTHORIZED,
+            403: NOT_ALLOWED,
+            429: THROTTLED,
+        },
+    ),
+    partial_update=extend_schema(
+        tags=["Jobs"],
+        summary="Update a job (owner, pending only)",
+        description="Adjusts the reserved points if `points_amount` changes.",
+        request=JobRequestWriteSerializer,
+        responses={
+            200: JobRequestWriteSerializer,
+            400: OpenApiResponse(
+                description=("Validation error, or the job can no longer be edited." + STATE_ERROR_NOTE)
+            ),
+            401: UNAUTHORIZED,
+            403: NOT_ALLOWED,
+            404: JOB_NOT_FOUND,
+            429: THROTTLED,
+        },
+    ),
+    destroy=extend_schema(
+        tags=["Jobs"],
+        summary="Cancel a job (owner, pending or open only)",
+        description="Releases the reserved points and rejects all pending offers.",
+        responses={
+            204: OpenApiResponse(description="Job cancelled."),
+            400: BAD_STATE,
+            401: UNAUTHORIZED,
+            403: NOT_ALLOWED,
+            404: JOB_NOT_FOUND,
+            429: THROTTLED,
+        },
+    ),
+)
 class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
     http_method_names = ["post", "get", "patch", "delete"]
     parser_classes = [MultiPartParser, FormParser]
@@ -223,6 +348,14 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
                 user=self.request.user, job=job)
         )
 
+        logger.info(
+            "Job created user_id=%s job_id=%s points=%s images=%s",
+            self.request.user.pk,
+            job.pk,
+            job.points_amount,
+            len(images),
+        )
+
     @transaction.atomic
     def perform_update(self, serializer):
         images = serializer.validated_data.pop("images", [])
@@ -253,6 +386,13 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
         transaction.on_commit(
             lambda: create_job_updated_notification(
                 user=self.request.user, job=job)
+        )
+
+        logger.info(
+            "Job updated user_id=%s job_id=%s points_changed=%s",
+            request.user.pk,
+            job.pk,
+            job.points_amount != old_points_amount,
         )
 
         return response
@@ -288,9 +428,34 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
             lambda: create_job_cancelled_notification(users=users, job=job)
         )
 
+        logger.info(
+            "Job cancelled by customer user_id=%s job_id=%s pending_offers_rejected=%s",
+            request.user.pk,
+            job.pk,
+            len(pending_offers),
+        )
+
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+# (Decorator is on the class: spectacular reads the post handler, not create().)
+@extend_schema(
+    tags=["Jobs"],
+    summary="Add an image to a pending job (owner)",
+    description="multipart/form-data. Limited to a maximum number of images per job.",
+    parameters=[JOB_ID],
+    request=JobRequestImageSerializer,
+    responses={
+        201: JobRequestImageSerializer,
+        400: OpenApiResponse(
+            description=("Validation error, image limit reached, or the job is not pending." + STATE_ERROR_NOTE)
+        ),
+        401: UNAUTHORIZED,
+        403: NOT_ALLOWED,
+        404: JOB_NOT_FOUND,
+        429: THROTTLED,
+    },
+)
 class JobRequestImageCreateView(JobRequestMixin, generics.CreateAPIView):
     serializer_class = JobRequestImageSerializer
     permission_classes = [IsCustomer]
@@ -299,13 +464,7 @@ class JobRequestImageCreateView(JobRequestMixin, generics.CreateAPIView):
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
-        job = get_object_or_404(
-            JobRequest.objects.select_for_update().select_related(
-                "customer",
-                "customer__user",
-            ),
-            pk=self.kwargs["pk"],
-        )
+        job = self.get_locked_job()
 
         self.check_job_owner(job)
         self.ensure_job_is_pending(job)
@@ -331,6 +490,13 @@ class JobRequestImageCreateView(JobRequestMixin, generics.CreateAPIView):
 
         serializer.save(job=job)
 
+        logger.info(
+            "Job image added user_id=%s job_id=%s image_id=%s",
+            request.user.pk,
+            job.pk,
+            serializer.instance.pk,
+        )
+
         return Response(
             serializer.data,
             status=status.HTTP_201_CREATED,
@@ -345,9 +511,17 @@ class JobRequestImageDeleteView(JobRequestMixin, APIView):
     http_method_names = ["delete"]
 
     @extend_schema(
+        tags=["Jobs"],
+        summary="Delete an image from a pending job (owner)",
+        parameters=[IMAGE_ID],
         request=None,
         responses={
             204: OpenApiResponse(description="Image deleted successfully."),
+            400: BAD_STATE,
+            401: UNAUTHORIZED,
+            403: NOT_ALLOWED,
+            404: OpenApiResponse(description="Image not found."),
+            429: THROTTLED,
         },
     )
     def delete(self, request, *args, **kwargs):
@@ -370,6 +544,67 @@ class JobRequestImageDeleteView(JobRequestMixin, APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+# NOTE: this one view serves two routes (/provider/offers/ and /jobs/<id>/offers/),
+# so the generated schema lists both. Splitting it into two classes would give
+# each route its own accurate documentation.
+@extend_schema_view(
+    get=extend_schema(
+        tags=["Offers"],
+        summary="List offers",
+        description=(
+            "Without a job ID (provider route): the verified provider's own offers. "
+            "With a job ID: the offers on that job, for the job's owner. Paginated."
+        ),
+        parameters=[
+            OpenApiParameter(
+                name="pk",
+                type=OpenApiTypes.UUID,
+                location=OpenApiParameter.PATH,
+                required=False,
+                description="Job ID (only on the job route).",
+            )
+        ],
+        responses={
+            200: JobRequestOfferSerializer,
+            401: UNAUTHORIZED,
+            403: NOT_ALLOWED,
+            404: JOB_NOT_FOUND,
+            429: THROTTLED,
+        },
+    ),
+    post=extend_schema(
+        tags=["Offers"],
+        summary="Make an offer on a job (verified providers)",
+        description=(
+            "Only valid on the job route. Re-offering after withdrawing reuses the "
+            "withdrawn offer."
+        ),
+        parameters=[
+            OpenApiParameter(
+                name="pk",
+                type=OpenApiTypes.UUID,
+                location=OpenApiParameter.PATH,
+                required=False,
+                description="Job ID.",
+            )
+        ],
+        request=JobRequestOfferSerializer,
+        responses={
+            201: JobRequestOfferSerializer,
+            400: OpenApiResponse(
+                description=((
+                    "Validation error, job not accepting offers, deadline passed, "
+                    "or an offer already exists."
+                ) + STATE_ERROR_NOTE)
+            ),
+            401: UNAUTHORIZED,
+            403: NOT_ALLOWED,
+            404: JOB_NOT_FOUND,
+            405: _detail("Called without a job ID."),
+            429: THROTTLED,
+        },
+    ),
+)
 class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
     serializer_class = JobRequestOfferSerializer
     throttle_scope = "job_offers"
@@ -387,7 +622,8 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
         return [IsVerifiedProvider()]
 
     # get_queryset returns the appropriate queryset based on the request method and whether a specific job ID is provided in the URL.
-    # For GET requests without a job ID, only verified providers can access the endpoint.
+    # For GET requests without a job ID, only verified providers can access the endpoint. 
+    # For GET requests with a job ID, the authenticated customer must own the job to access the offers.
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
             return JobRequestOffer.objects.none()
@@ -417,6 +653,7 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
             return [UserRateThrottle()]
         return [ScopedRateThrottle()]
 
+    @transaction.atomic
     def create(self, request, *args, **kwargs):
         # Provider's get request doesn't have a job_id
         # This disables the provider from sending a post request w/o including a job_id
@@ -426,7 +663,7 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
                 status=status.HTTP_405_METHOD_NOT_ALLOWED,
             )
 
-        job = self.get_locked_job()  # from Step 14
+        job = self.get_locked_job()
         self.ensure_job_is_pending_or_open(
             job, "This job is no longer accepting offers."
         )
@@ -466,6 +703,14 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
                 user=job.customer.user, job=job)
         )
 
+        logger.info(
+            "Offer submitted provider_id=%s job_id=%s offer_id=%s reoffer=%s",
+            provider.pk,
+            job.pk,
+            offer.pk,
+            reoffer,
+        )
+
         return Response(data, status=status.HTTP_201_CREATED)
 
 
@@ -475,12 +720,27 @@ class JobOfferAcceptView(JobRequestMixin, ProviderMixin, APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "job_offer_actions"
 
-    # transaction.atomic ensures that the entire operation is treated as a single transaction.
-    # If any part of the operation fails, the entire transaction will be rolled back, ensuring data integrity.
     @extend_schema(
+        tags=["Offers"],
+        summary="Accept an offer (job owner)",
+        description=(
+            "No request body. Moves the job to in-progress and rejects all other "
+            "pending offers."
+        ),
+        parameters=[OFFER_ID],
         request=None,
         responses={
-            200: OpenApiResponse(description="Offer accepted."),
+            200: _detail("Offer accepted."),
+            400: OpenApiResponse(
+                description=((
+                    "Job not open, offer already processed, or the job's deadline "
+                    "has passed."
+                ) + STATE_ERROR_NOTE)
+            ),
+            401: UNAUTHORIZED,
+            403: NOT_ALLOWED,
+            404: OFFER_NOT_FOUND,
+            429: THROTTLED,
         },
     )
     @transaction.atomic
@@ -544,6 +804,14 @@ class JobOfferAcceptView(JobRequestMixin, ProviderMixin, APIView):
                 )
             )
 
+        logger.info(
+            "Offer accepted user_id=%s job_id=%s offer_id=%s others_rejected=%s",
+            request.user.pk,
+            job.pk,
+            offer.pk,
+            len(other_offers),
+        )
+
         return Response({"detail": "Offer accepted."}, status=status.HTTP_200_OK)
 
 
@@ -554,9 +822,18 @@ class JobOfferRejectView(JobRequestMixin, ProviderMixin, APIView):
     throttle_scope = "job_offer_actions"
 
     @extend_schema(
+        tags=["Offers"],
+        summary="Reject an offer (job owner)",
+        description="No request body. The job returns to pending if no offers are left.",
+        parameters=[OFFER_ID],
         request=None,
         responses={
-            200: OpenApiResponse(description="Offer rejected."),
+            200: _detail("Offer rejected."),
+            400: BAD_STATE,
+            401: UNAUTHORIZED,
+            403: NOT_ALLOWED,
+            404: OFFER_NOT_FOUND,
+            429: THROTTLED,
         },
     )
     @transaction.atomic
@@ -598,6 +875,13 @@ class JobOfferRejectView(JobRequestMixin, ProviderMixin, APIView):
             )
         )
 
+        logger.info(
+            "Offer rejected user_id=%s job_id=%s offer_id=%s",
+            request.user.pk,
+            job.pk,
+            offer.pk,
+        )
+
         return Response({"detail": "Offer rejected."}, status=status.HTTP_200_OK)
 
 
@@ -608,9 +892,18 @@ class JobOfferWithdrawView(ProviderMixin, JobRequestMixin, APIView):
     throttle_scope = "job_offer_actions"
 
     @extend_schema(
+        tags=["Offers"],
+        summary="Withdraw my offer (provider)",
+        description="No request body. Only pending offers on open jobs can be withdrawn.",
+        parameters=[OFFER_ID],
         request=None,
         responses={
-            200: OpenApiResponse(description="Offer withdrawn."),
+            200: _detail("Offer withdrawn."),
+            400: BAD_STATE,
+            401: UNAUTHORIZED,
+            403: NOT_ALLOWED,
+            404: OFFER_NOT_FOUND,
+            429: THROTTLED,
         },
     )
     @transaction.atomic
@@ -643,9 +936,36 @@ class JobOfferWithdrawView(ProviderMixin, JobRequestMixin, APIView):
         offer.status = JobOfferStatus.WITHDRAWN
         offer.save(update_fields=["status", "updated_at"])
 
+        logger.info(
+            "Offer withdrawn user_id=%s job_id=%s offer_id=%s",
+            request.user.pk,
+            job.pk,
+            offer.pk,
+        )
+
         return Response({"detail": "Offer withdrawn."}, status=status.HTTP_200_OK)
 
 
+@extend_schema(
+    tags=["Jobs"],
+    summary="Upload completion images (accepted provider)",
+    description=(
+        "multipart/form-data with one or more `images`. Only while the job is in "
+        "progress. Limited to a maximum number of completion images per job."
+    ),
+    parameters=[JOB_ID],
+    request=JobCompletionImageSerializer,
+    responses={
+        201: _detail("N completion image(s) uploaded successfully."),
+        400: OpenApiResponse(
+            description=("No images, too many images, invalid image, or the job is not in progress." + STATE_ERROR_NOTE)
+        ),
+        401: UNAUTHORIZED,
+        403: NOT_ALLOWED,
+        404: JOB_NOT_FOUND,
+        429: THROTTLED,
+    },
+)
 class JobCompletionImageCreateView(
     JobRequestMixin, ProviderMixin, generics.CreateAPIView
 ):
@@ -703,6 +1023,13 @@ class JobCompletionImageCreateView(
             ]
         )
 
+        logger.info(
+            "Completion images uploaded user_id=%s job_id=%s count=%s",
+            request.user.pk,
+            job.pk,
+            len(images),
+        )
+
         return Response(
             {"detail": f"{len(images)} completion image(s) uploaded successfully."},
             status=status.HTTP_201_CREATED,
@@ -716,9 +1043,26 @@ class JobRequestCompletionView(JobRequestMixin, ProviderMixin, APIView):
     throttle_scope = "job_completion"
 
     @extend_schema(
+        tags=["Jobs"],
+        summary="Request completion confirmation (accepted provider)",
+        description=(
+            "No request body. Requires at least one completion image and a job that "
+            "is in progress and not past its deadline."
+        ),
+        parameters=[JOB_ID],
         request=None,
         responses={
-            200: OpenApiResponse(description="Completion request sent successfully.")
+            200: _detail("Completion request sent successfully."),
+            400: OpenApiResponse(
+                description=((
+                    "Job not in progress, no completion image uploaded, or the "
+                    "deadline has passed."
+                ) + STATE_ERROR_NOTE)
+            ),
+            401: UNAUTHORIZED,
+            403: NOT_ALLOWED,
+            404: JOB_NOT_FOUND,
+            429: THROTTLED,
         },
     )
     @transaction.atomic
@@ -730,11 +1074,11 @@ class JobRequestCompletionView(JobRequestMixin, ProviderMixin, APIView):
         )
         self.check_accepted_provider(job)
 
-        # After the deadline, Celery settles the job. Without this check a provider
-        # could submit late and be paid in full instead of the partial percentage.
+        # After the deadline, Celery settles the job. 
+        # Without this check a provider could submit late and be paid in full instead of the partial percentage.
         if job.deadline is not None and job.deadline <= timezone.now():
             raise ValidationError(
-                "The deadline has passed. This job will be settled automatically."
+                {"detail": "The deadline has passed. This job will be settled automatically."}
             )
 
         # Ensure that at least one completion image has been uploaded before allowing the provider to request completion.
@@ -760,6 +1104,10 @@ class JobRequestCompletionView(JobRequestMixin, ProviderMixin, APIView):
             )
         )
 
+        logger.info(
+            "Completion requested user_id=%s job_id=%s", request.user.pk, job.pk
+        )
+
         return Response(
             {"detail": ("Completion request sent successfully.")},
             status=status.HTTP_200_OK,
@@ -773,9 +1121,23 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
     throttle_scope = "job_completion"
 
     @extend_schema(
+        tags=["Jobs"],
+        summary="Confirm completion and rate the provider (job owner)",
+        description=(
+            "Records the rating, updates the provider's rating statistics and "
+            "releases payment to the provider."
+        ),
+        parameters=[JOB_ID],
         request=JobConfirmCompletionSerializer,
         responses={
-            200: OpenApiResponse(description="Job completed successfully."),
+            200: JobCompletionConfirmedResponseSerializer,
+            400: OpenApiResponse(
+                description=("Validation error, or the job is not awaiting confirmation." + STATE_ERROR_NOTE)
+            ),
+            401: UNAUTHORIZED,
+            403: NOT_ALLOWED,
+            404: JOB_NOT_FOUND,
+            429: THROTTLED,
         },
     )
     @transaction.atomic
@@ -848,6 +1210,15 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
             )
         )
 
+        # The rating comment text is intentionally not logged.
+        logger.info(
+            "Job completed and paid user_id=%s job_id=%s provider_id=%s rating=%s",
+            request.user.pk,
+            job.pk,
+            provider.pk,
+            rating_value,
+        )
+
         return Response(
             {
                 "detail": "Job completed successfully.",
@@ -860,6 +1231,12 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
         )
 
 
+@extend_schema(
+    tags=["Ratings"],
+    summary="List ratings with comments left for me (provider)",
+    description="Visible ratings that have a comment. Paginated.",
+    responses={200: ProviderRatingSerializer, 401: UNAUTHORIZED, 403: NOT_ALLOWED},
+)
 class MyRatingsListView(generics.ListAPIView):
     """Comments left for the logged-in provider."""
 
@@ -867,11 +1244,20 @@ class MyRatingsListView(generics.ListAPIView):
     permission_classes = [IsProvider]
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return ProviderRating.objects.none()
         return ProviderRating.objects.filter(
             provider=self.request.user.provider_profile, is_visible=True
         ).exclude(comment="")
 
 
+@extend_schema(
+    tags=["Ratings"],
+    summary="List ratings with comments for a provider",
+    description="Visible ratings that have a comment. Paginated.",
+    parameters=[PROVIDER_ID],
+    responses={200: ProviderRatingSerializer, 401: UNAUTHORIZED},
+)
 class ProviderRatingsPublicListView(generics.ListAPIView):
     """Comments left for a given provider, for customers browsing."""
 
@@ -879,11 +1265,36 @@ class ProviderRatingsPublicListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return ProviderRating.objects.none()
         return ProviderRating.objects.filter(
             provider_id=self.kwargs["provider_id"], is_visible=True
         ).exclude(comment="")
 
 
+@extend_schema(
+    tags=["Disputes"],
+    summary="Open a dispute on a job (job owner)",
+    description=(
+        "Only while the job is awaiting confirmation and before its deadline. "
+        "Moves the job to disputed and notifies the provider and admins."
+    ),
+    parameters=[JOB_ID],
+    request=JobDisputeSerializer,
+    responses={
+        201: JobDisputeSerializer,
+        400: OpenApiResponse(
+            description=((
+                "Validation error, job not awaiting confirmation, deadline passed, "
+                "or a dispute already exists."
+            ) + STATE_ERROR_NOTE)
+        ),
+        401: UNAUTHORIZED,
+        403: NOT_ALLOWED,
+        404: JOB_NOT_FOUND,
+        429: THROTTLED,
+    },
+)
 class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
     serializer_class = JobDisputeSerializer
     permission_classes = [IsCustomer]
@@ -948,12 +1359,30 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
                 )
             )
 
+        logger.info(
+            "Dispute opened user_id=%s job_id=%s dispute_id=%s",
+            request.user.pk,
+            job.pk,
+            serializer.instance.pk,
+        )
+
         return Response(
             serializer.data,
             status=status.HTTP_201_CREATED,
         )
 
 
+@extend_schema(
+    tags=["Disputes"],
+    summary="Get a dispute (job owner or admin)",
+    responses={
+        200: JobDisputeSerializer,
+        401: UNAUTHORIZED,
+        403: NOT_ALLOWED,
+        404: OpenApiResponse(description="Dispute not found."),
+        429: THROTTLED,
+    },
+)
 class JobDisputeDetailView(JobRequestMixin, generics.RetrieveAPIView):
     serializer_class = JobDisputeSerializer
     permission_classes = [IsCustomer | IsAdminUser]
@@ -986,6 +1415,28 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
             "job", "job__customer__user"
         )
 
+    @extend_schema(
+        tags=["Disputes"],
+        summary="Resolve a dispute (admin)",
+        description=(
+            "`decision` is required: `refund_points` cancels the job and refunds the "
+            "customer; `release_points` completes the job and pays the provider."
+        ),
+        request=AdminJobDisputeSerializer,
+        responses={
+            200: AdminJobDisputeSerializer,
+            400: OpenApiResponse(
+                description=((
+                    "Validation error, missing/invalid decision, dispute already "
+                    "resolved, or the job is not disputed."
+                ) + STATE_ERROR_NOTE)
+            ),
+            401: UNAUTHORIZED,
+            403: NOT_ALLOWED,
+            404: OpenApiResponse(description="Dispute not found."),
+            429: THROTTLED,
+        },
+    )
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
         dispute = self.get_object()
@@ -1057,5 +1508,13 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
             )
 
         job.save(update_fields=["status", "completed_at", "updated_at"])
+
+        logger.info(
+            "Dispute resolved admin_id=%s dispute_id=%s job_id=%s decision=%s",
+            request.user.pk,
+            dispute.pk,
+            job.pk,
+            decision,
+        )
 
         return Response(serializer.data, status=status.HTTP_200_OK)

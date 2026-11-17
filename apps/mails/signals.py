@@ -10,4 +10,4 @@ from apps.mails.models import MailboxMessage
 @receiver(post_delete, sender=MailboxMessage)
 def mailbox_message_changed(sender, instance, **kwargs):
     user_id = instance.user_id
-    transaction.on_commit(lambda: invalidate_mailbox(user_id))
+    transaction.on_commit(lambda: invalidate_mailbox(user_id), robust=True)

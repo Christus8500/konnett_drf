@@ -185,9 +185,10 @@ class ProviderVerificationSerializer(serializers.ModelSerializer):
             "id_document",
             "selfie_image",
             "status",
+            "admin_comment",
             "submitted_at",
         ]
-        read_only_fields = ["id", "status", "submitted_at"]
+        read_only_fields = ["id", "status", "admin_comment", "submitted_at"]
         extra_kwargs = {
             "id_document": {
                 "required": False,
@@ -207,5 +208,32 @@ class ProviderVerificationSerializer(serializers.ModelSerializer):
         if "id_document" in validated_data or "selfie_image" in validated_data:
             validated_data["status"] = ProviderVerificationStatus.PENDING
             validated_data["submitted_at"] = timezone.now()
+            validated_data["admin_comment"] = ""
 
         return super().update(instance, validated_data)
+
+
+# ---------- Documentation-only serializers for the admin status endpoint ----------
+class VerificationStatusUpdateRequestSerializer(serializers.Serializer):
+    verification_status = serializers.ChoiceField(
+        choices=[
+            ProviderVerificationStatus.VERIFIED,
+            ProviderVerificationStatus.REJECTED,
+        ]
+    )
+    admin_comment = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text="Required when rejecting a verification.",
+    )
+
+
+class VerificationStatusUpdateResponseSerializer(serializers.Serializer):
+    message = serializers.CharField()
+    verification_status = serializers.CharField()
+
+
+class VerificationErrorSerializer(serializers.Serializer):
+    # The endpoint currently uses "error" for most failures and "detail" for one.
+    error = serializers.CharField(required=False)
+    detail = serializers.CharField(required=False)

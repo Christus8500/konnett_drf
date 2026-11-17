@@ -31,3 +31,8 @@ class MailboxMessageListSerializer(serializers.ModelSerializer):
             "is_read",
             "created_at",
         ]
+
+
+class MailboxUnreadCountSerializer(serializers.Serializer):
+    # Documentation only.
+    count = serializers.IntegerField(help_text="Number of unread messages.")

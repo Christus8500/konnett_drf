@@ -80,7 +80,7 @@ class ProviderProfile(UUIDModel, TimeStampedModel):
         ]
 
     @property
-    def full_name(self):
+    def full_name(self) -> str:
         return self.user.full_name
 
     def __str__(self):

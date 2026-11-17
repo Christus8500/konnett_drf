@@ -43,27 +43,27 @@ class JobRequestMixin:
 
     def ensure_job_is_pending(self, job, message="This job is not pending."):
         if job.status != JobRequestStatus.PENDING:
-            raise ValidationError(message)
+            raise ValidationError({"detail": message})
 
     def ensure_job_is_open(self, job, message="This job is not open."):
         if job.status != JobRequestStatus.OPEN:
-            raise ValidationError(message)
+            raise ValidationError({"detail": message})
 
     def ensure_job_is_pending_or_open(
         self, job, message="Only pending or open jobs can be cancelled."
     ):
         if job.status not in [JobRequestStatus.PENDING, JobRequestStatus.OPEN]:
-            raise ValidationError(message)
+            raise ValidationError({"detail": message})
 
     def ensure_job_is_in_progress(self, job, message="This job is not in progress."):
         if job.status != JobRequestStatus.IN_PROGRESS:
-            raise ValidationError(message)
+            raise ValidationError({"detail": message})
 
     def ensure_job_is_awaiting_confirmation(
         self, job, message="This job is not awaiting confirmation."
     ):
         if job.status != JobRequestStatus.AWAITING_CONFIRMATION:
-            raise ValidationError(message)
+            raise ValidationError({"detail": message})
 
     def check_dispute_owner(self, dispute):
         if dispute.job.customer.user != self.request.user:
@@ -71,7 +71,7 @@ class JobRequestMixin:
 
     def ensure_dispute_is_unresolved(self, dispute):
         if dispute.decision:
-            raise ValidationError("This dispute has been already resolved.")
+            raise ValidationError({"detail": "This dispute has already been resolved."})
 
 
 class ProviderMixin:
@@ -98,4 +98,4 @@ class ProviderMixin:
 
     def ensure_offer_is_pending(self, offer, message="This offer is not pending."):
         if offer.status != JobOfferStatus.PENDING:
-            raise ValidationError(message)
+            raise ValidationError({"detail": message})

@@ -211,3 +211,34 @@ class PlatformFeeEntrySerializer(serializers.ModelSerializer):
         fields = ["id", "source", "points",
                   "purchase_id", "job_id", "created_at"]
         read_only_fields = fields
+
+
+# ---------- Documentation-only serializers ----------
+class PointsDetailResponseSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+
+
+class PaymentWebhookSerializer(serializers.Serializer):
+    txRef = serializers.CharField(
+        help_text="Payment reference of the purchase.")
+    status = serializers.CharField(
+        help_text="Provider status, e.g. `successful` or `failed`."
+    )
+    amount = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        required=False,
+        help_text="Required for successful payments; must equal the purchase amount.",
+    )
+    createdAt = serializers.DateTimeField(required=False)
+
+
+class PurchaseVerifiedResponseSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+    purchase_reference = serializers.CharField(required=False)
+    points = serializers.IntegerField(required=False)
+
+
+class PlatformFeeTotalSerializer(serializers.Serializer):
+    total_points = serializers.IntegerField()
+    by_source = serializers.DictField(child=serializers.IntegerField())
