@@ -1,5 +1,6 @@
 from django.shortcuts import get_object_or_404
 
+from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.jobs.models import JobRequest, JobRequestOffer
@@ -21,7 +22,7 @@ class JobRequestMixin:
             ),
             pk=self.kwargs["pk"],
         )
-    
+
     def get_locked_job(self):
         """
         Same as get_job(), but locks the job row until the transaction ends.
@@ -63,6 +64,21 @@ class JobRequestMixin:
         self, job, message="This job is not awaiting confirmation."
     ):
         if job.status != JobRequestStatus.AWAITING_CONFIRMATION:
+            raise ValidationError({"detail": message})
+
+    def ensure_job_is_awaiting_confirmation_or_in_progress(
+        self, job, message="This job is not awaiting confirmation or in progress."
+    ):
+        if job.status not in [
+            JobRequestStatus.AWAITING_CONFIRMATION,
+            JobRequestStatus.IN_PROGRESS,
+        ]:
+            raise ValidationError({"detail": message})
+
+    def ensure_deadline_not_passed(
+        self, job, message="The deadline for this job has passed."
+    ):
+        if job.deadline is not None and job.deadline <= timezone.now():
             raise ValidationError({"detail": message})
 
     def check_dispute_owner(self, dispute):

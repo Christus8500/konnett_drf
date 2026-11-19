@@ -35,10 +35,16 @@ class JobOfferStatus(models.TextChoices):
     WITHDRAWN = "withdrawn", "Withdrawn"
 
 
+class DisputeSource(models.TextChoices):
+    CUSTOMER = "customer", "Customer"
+    SYSTEM_DEADLINE = "system_deadline", "Deadline reached"
+
+
 # Choices for dispute decision
 class JobDisputeDecision(models.TextChoices):
     RELEASE_POINTS = "release_points", "Release Points"
     REFUND_POINTS = "refund_points", "Refund Points"
+    PARTIAL_PAY = "partial_pay", "Partial Pay" 
 
 
 # Choices for payment status

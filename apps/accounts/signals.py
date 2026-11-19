@@ -3,9 +3,13 @@ from django.dispatch import receiver
 from django.core.cache import cache
 
 from apps.core.choices import UserRole
+
 from apps.accounts.models import User
+
 from apps.customers.models import CustomerProfile
+
 from apps.providers.models import ProviderProfile
+
 from apps.konnett_points.models import PointWallet
 
 

@@ -199,7 +199,7 @@ LOGGING = {
     "handlers": {
         "file": {
             "class": "logging.FileHandler",
-            "filename": "/home/YOUR_USERNAME/logs/app.log",
+            "filename": "/Users/USER/Desktop/KONNETT/logs/app.log",
             "formatter": "standard",
         },
     },
@@ -292,6 +292,7 @@ REST_FRAMEWORK = {
         "password_reset": "5/hour",
         "email_change": "5/hour",
         "email_verification": "5/hour",
+        "job_progress": "30/hour",
     },
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_FILTER_BACKENDS": [

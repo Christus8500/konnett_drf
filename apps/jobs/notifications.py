@@ -1,7 +1,12 @@
+from django.utils import timezone
+from django.db import transaction
+
+from apps.accounts.models import User
+
 from apps.mails.services import create_mailbox_message
 
 from apps.core.choices import UserRole
-from apps.core.constants import JOB_IN_PROGRESS_PROVIDER_PERCENT, ADMIN_FEE_RATE_PERCENT
+from apps.core.constants import ADMIN_FEE_RATE_PERCENT, JOB_IN_PROGRESS_PROVIDER_PERCENT
 
 
 # job_created_notification: Creates a notification for a user when they create a job.
@@ -119,12 +124,23 @@ def create_job_offer_rejected_notification(user, job):
 
 
 def create_job_completion_request_notification(user, job):
+    review_ends = job.auto_release_at
+    if review_ends is not None:
+        review_line = (
+            "Please confirm the job, or open a dispute if something is wrong, "
+            f"before {timezone.localtime(review_ends).strftime('%d %b %Y, %I:%M %p %Z')}. "
+            "After that, payment is released to the provider automatically.\n\n"
+        )
+    else:
+        review_line = ""
+
     return create_mailbox_message(
         user=user,
         subject=f"Job Completion Requested for {job.title}",
         body=(
             f"Hi {user.first_name},\n\n"
             f"The provider has requested completion for the job '{job.title}'.\n\n"
+            f"{review_line}"
             "Please check your account for more details.\n\n"
             "Thanks."
         ),
@@ -166,6 +182,84 @@ def create_job_completed_by_deadline_notification(users, job):
                 "Please check your account for more details.\n\n"
                 "Thanks."
             ),
+        )
+
+
+def create_dispute_opened_customer_notification(user, job):
+    """Sent when the system (deadline) opens the dispute."""
+    return create_mailbox_message(
+        user=user,
+        subject=f"Deadline reached for {job.title}",
+        body=(
+            f"Hi {user.first_name},\n\n"
+            f"The deadline for '{job.title}' passed before the job was completed. "
+            "A dispute has been opened automatically and an admin will review it. "
+            "Your points stay on hold until a decision is made.\n\n"
+            "Thanks."
+        ),
+    )
+
+
+def create_dispute_response_admin_notification(user, job):
+    return create_mailbox_message(
+        user=user,
+        subject=f"Provider responded to dispute on {job.title}",
+        body=(
+            f"Hi {user.first_name},\n\n"
+            f"The provider has responded to the dispute on '{job.title}'. "
+            "It is ready for review.\n\n"
+            "Thanks."
+        ),
+    )
+
+
+def create_dispute_partial_customer_notification(user, job, percentage):
+    return create_mailbox_message(
+        user=user,
+        subject=f"Dispute resolved for {job.title}",
+        body=(
+            f"Hi {user.first_name},\n\n"
+            f"The dispute on '{job.title}' was resolved. The provider was paid for "
+            f"{percentage}% of the job and the remaining points were refunded to "
+            "your available balance.\n\n"
+            "Thanks."
+        ),
+    )
+
+
+def create_dispute_partial_provider_notification(user, job, percentage):
+    return create_mailbox_message(
+        user=user,
+        subject=f"Dispute resolved for {job.title}",
+        body=(
+            f"Hi {user.first_name},\n\n"
+            f"The dispute on '{job.title}' was resolved. You were paid for "
+            f"{percentage}% of the job (minus the platform fee).\n\n"
+            "Thanks."
+        ),
+    )
+
+
+def notify_dispute_opened(job, provider_user, *, system=False):
+    """
+    Call inside a transaction. Notifies the provider and all admins and, for
+    system-opened disputes, the customer (who didn't click anything).
+    """
+    customer_user = job.customer.user
+
+    transaction.on_commit(
+        lambda: create_dispute_opened_notification(user=provider_user, job=job)
+    )
+    if system:
+        transaction.on_commit(
+            lambda: create_dispute_opened_customer_notification(
+                user=customer_user, job=job
+            )
+        )
+    admins = list(User.objects.filter(role=UserRole.ADMIN, is_active=True))
+    for admin in admins:
+        transaction.on_commit(
+            lambda u=admin: create_dispute_opened_admin_notification(user=u, job=job)
         )
 
 

@@ -1,12 +1,19 @@
+from datetime import timedelta
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 
-from apps.core.choices import JobRequestStatus, JobOfferStatus, JobDisputeDecision
+from apps.core.choices import (
+    JobRequestStatus,
+    JobOfferStatus,
+    JobDisputeDecision,
+    DisputeSource,
+)
 from apps.core.models import UUIDModel, TimeStampedModel
-from apps.core.constants import MINIMUM_JOB_POINTS
+from apps.core.constants import MINIMUM_JOB_POINTS, JOB_REVIEW_WINDOW_HOURS
 from apps.providers.models import unique_filename
 
 
@@ -17,7 +24,10 @@ def job_request_image_upload(instance, filename):
 
 def job_completion_image_upload(instance, filename):
     return f"jobs/{instance.job_id}/job_completion/{unique_filename(filename)}"
-    return f"jobs/{instance.job.id}/job_completion/{filename}"
+
+
+def job_progress_image_upload(instance, filename):
+    return f"jobs/{instance.job_id}/job_progress/{unique_filename(filename)}"
 
 
 # Create your models here.
@@ -58,6 +68,8 @@ class JobRequest(UUIDModel, TimeStampedModel):
         default=JobRequestStatus.PENDING,
         db_index=True,
     )
+    started_at = models.DateTimeField(blank=True, null=True)
+    completion_requested_at = models.DateTimeField(blank=True, null=True)
     completed_at = models.DateTimeField(blank=True, null=True)
 
     admin_fee_points = models.PositiveIntegerField(null=True, blank=True)
@@ -107,6 +119,32 @@ class JobRequest(UUIDModel, TimeStampedModel):
                 kwargs["update_fields"] = {*update_fields, "completed_at"}
         super().save(*args, **kwargs)
 
+    @property
+    def auto_release_at(self):
+        """
+        When an AWAITING_CONFIRMATION job is auto-paid: the later of the
+        deadline and (completion request + review window).
+        Legacy rows without completion_requested_at fall back to the deadline.
+        """
+        if self.deadline is None:
+            return None
+        if self.completion_requested_at is None:
+            return self.deadline
+        return max(
+            self.deadline,
+            self.completion_requested_at + timedelta(hours=JOB_REVIEW_WINDOW_HOURS),
+        )
+
+    def is_ratable(self):
+        """Completed, or closed by an admin dispute decision (any outcome)."""
+        if self.status == JobRequestStatus.COMPLETED:
+            return True
+        if self.status == JobRequestStatus.CANCELLED:
+            # `dispute` is a reverse OneToOne; getattr handles "no dispute".
+            dispute = getattr(self, "dispute", None)
+            return dispute is not None and bool(dispute.decision)
+        return False
+
     def __str__(self):
         return f"{self.title}, by {self.customer}"
 
@@ -145,6 +183,38 @@ class JobCompletionImage(UUIDModel, TimeStampedModel):
 
     def __str__(self):
         return f"Completion image for {self.job}, by {self.provider}"
+
+
+class JobProgressUpdate(UUIDModel, TimeStampedModel):
+    job = models.ForeignKey(
+        JobRequest, on_delete=models.CASCADE, related_name="job_progress_updates"
+    )
+    provider = models.ForeignKey(
+        "providers.ProviderProfile",
+        on_delete=models.PROTECT,
+        related_name="job_progress_updates",
+    )
+    note = models.TextField(blank=True, default="", max_length=1000)
+    image = models.ImageField(upload_to=job_progress_image_upload, blank=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def clean(self):
+        super().clean()
+        if not self.note and not self.image:
+            raise ValidationError("A progress update needs a note or an image.")
+        if self.job_id and self.provider_id:
+            is_assigned = self.job.job_offers.filter(
+                provider_id=self.provider_id, status=JobOfferStatus.ACCEPTED
+            ).exists()
+            if not is_assigned:
+                raise ValidationError(
+                    "Only the provider with the accepted offer can post progress updates."
+                )
+
+    def __str__(self):
+        return f"Progress update for {self.job}, by {self.provider}"
 
 
 # TODO:
@@ -186,11 +256,21 @@ class JobRequestOffer(UUIDModel, TimeStampedModel):
 
 class JobDispute(UUIDModel, TimeStampedModel):
     job = models.OneToOneField(
-        JobRequest,
-        on_delete=models.CASCADE,
-        related_name="dispute",
+        JobRequest, on_delete=models.CASCADE, related_name="dispute"
     )
-    customer_reason = models.TextField()
+    source = models.CharField(
+        max_length=20,
+        choices=DisputeSource.choices,
+        default=DisputeSource.CUSTOMER,
+        db_index=True,
+    )
+    # Blank for system-opened disputes. The serializer requires it for customers.
+    customer_reason = models.TextField(blank=True, default="")
+    system_reason = models.TextField(blank=True, default="")
+
+    provider_response = models.TextField(blank=True, default="")
+    provider_responded_at = models.DateTimeField(blank=True, null=True)
+
     admin_note = models.TextField(blank=True, default="")
     decision = models.CharField(
         max_length=20,
@@ -198,6 +278,13 @@ class JobDispute(UUIDModel, TimeStampedModel):
         blank=True,
         default="",
         db_index=True,
+    )
+    # Only used with decision == partial_pay: the provider's share of the job
+    # points, before the admin fee.
+    provider_percentage = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1), MaxValueValidator(99)],
     )
     resolved_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -207,6 +294,23 @@ class JobDispute(UUIDModel, TimeStampedModel):
         related_name="resolved_job_disputes",
     )
     resolved_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        decision=JobDisputeDecision.PARTIAL_PAY,
+                        provider_percentage__isnull=False,
+                    )
+                    | (
+                        ~models.Q(decision=JobDisputeDecision.PARTIAL_PAY)
+                        & models.Q(provider_percentage__isnull=True)
+                    )
+                ),
+                name="dispute_percentage_only_with_partial_pay",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         if self.decision and self.resolved_at is None:
@@ -245,7 +349,6 @@ class ProviderRating(UUIDModel, TimeStampedModel):
             MaxValueValidator(5),
         ]
     )
-    # TODO: Check the view for adding comments
     comment = models.TextField(blank=True, default="")
 
     is_visible = models.BooleanField(default=True, db_index=True)
@@ -265,8 +368,10 @@ class ProviderRating(UUIDModel, TimeStampedModel):
             return
         if self.customer_id and self.customer_id != self.job.customer_id:
             raise ValidationError("Only the customer who posted the job can rate it.")
-        if self.job.status != JobRequestStatus.COMPLETED:
-            raise ValidationError("Only completed jobs can be rated.")
+        if not self.job.is_ratable():
+            raise ValidationError(
+                "Jobs can only be rated after completion or an admin dispute decision."
+            )
         if (
             self.provider_id
             and not self.job.job_offers.filter(

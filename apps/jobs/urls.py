@@ -3,6 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import SimpleRouter
 
 from apps.jobs.views import (
+    JobRatingCreateView,
     JobRequestViewSet,
     JobRequestImageCreateView,
     JobRequestImageDeleteView,
@@ -16,6 +17,9 @@ from apps.jobs.views import (
     JobDisputeCreateView,
     JobDisputeDetailView,
     AdminResolveDisputeView,
+    JobStartView,
+    JobProgressUpdateCreateView,
+    ProviderRespondDisputeView,
 )
 
 router = SimpleRouter()
@@ -53,6 +57,17 @@ urlpatterns = [
         JobOfferWithdrawView.as_view(),
         name="job-offer-withdraw",
     ),
+    ####  PROGRESS  ####
+    path(
+        "<uuid:pk>/start/",
+        JobStartView.as_view(),
+        name="job-start",
+    ),
+    path(
+        "<uuid:pk>/progress/",
+        JobProgressUpdateCreateView.as_view(),
+        name="job-progress-create",
+    ),
     ####  COMPLETIONS  ####
     path(
         "<uuid:pk>/completion-images/",
@@ -69,6 +84,8 @@ urlpatterns = [
         JobConfirmCompletionView.as_view(),
         name="job-confirm-completion",
     ),
+    ####  RATING  ####
+    path("<uuid:pk>/rating/", JobRatingCreateView.as_view(), name="job-rating"),
     ####  DISPUTES  ####
     path(
         "<uuid:pk>/dispute/", JobDisputeCreateView.as_view(), name="job-dispute-create"
@@ -80,5 +97,10 @@ urlpatterns = [
         "disputes/<uuid:pk>/resolve/",
         AdminResolveDisputeView.as_view(),
         name="job-dispute-resolve",
+    ),
+    path(
+        "disputes/<uuid:pk>/respond/",
+        ProviderRespondDisputeView.as_view(),
+        name="job-dispute-respond",
     ),
 ]

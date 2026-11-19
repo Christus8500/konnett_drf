@@ -12,7 +12,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.filters import OrderingFilter, SearchFilter
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.exceptions import ValidationError
 from rest_framework.throttling import (
     ScopedRateThrottle,
@@ -40,9 +40,14 @@ from apps.core.choices import (
     JobDisputeDecision,
     TransactionType,
     UserRole,
+    DisputeSource,
 )
-from apps.core.constants import MAX_JOB_COMPLETION_IMAGES, MAX_JOB_REQUEST_IMAGES
-from apps.core.utils import FORBIDDEN, THROTTLED, UNAUTHORIZED
+from apps.core.constants import (
+    MAX_JOB_COMPLETION_IMAGES,
+    MAX_JOB_REQUEST_IMAGES,
+    MAX_JOB_PROGRESS_UPDATES,
+)
+from apps.core.utils import THROTTLED, UNAUTHORIZED
 
 from apps.accounts.models import User
 
@@ -66,13 +71,15 @@ from apps.jobs.serializers import (
     JobDisputeSerializer,
     AdminJobDisputeSerializer,
     JobsDetailResponseSerializer,
+    JobRatingSerializer,
     ProviderRatingSerializer,
+    JobProgressUpdateSerializer,
+    ProviderDisputeResponseSerializer,
+    JobStartedResponseSerializer,
 )
 from apps.jobs.filters import JobFilter
 from apps.jobs.notifications import (
     create_dispute_cancelled_provider_notification,
-    create_dispute_opened_admin_notification,
-    create_dispute_opened_notification,
     create_dispute_refunded_customer_notification,
     create_dispute_released_customer_notification,
     create_dispute_released_provider_notification,
@@ -84,21 +91,30 @@ from apps.jobs.notifications import (
     create_job_offer_rejected_notification,
     create_job_updated_notification,
     create_job_cancelled_notification,
+    create_dispute_response_admin_notification,
+    create_dispute_partial_customer_notification,
+    create_dispute_partial_provider_notification,
+    notify_dispute_opened,
 )
+from apps.jobs.services import create_provider_rating
 
 from apps.konnett_points.utils import (
     pay_provider,
+    pay_provider_partial,
     reserve_job_points,
     adjust_reserved_points,
     release_reserved_points,
 )
 
 from apps.providers.models import ProviderProfile
- 
+
 logger = logging.getLogger(__name__)
 
+
 def _detail(description):
-    return OpenApiResponse(response=JobsDetailResponseSerializer, description=description)
+    return OpenApiResponse(
+        response=JobsDetailResponseSerializer, description=description
+    )
 
 
 def _path_uuid(name, description):
@@ -110,23 +126,28 @@ def _path_uuid(name, description):
     )
 
 
-
 JOB_ID = _path_uuid("pk", "Job ID.")
+DISPUTE_ID = _path_uuid("pk", "Dispute ID.")
 OFFER_ID = _path_uuid("pk", "Offer ID.")
 IMAGE_ID = _path_uuid("pk", "Image ID.")
 PROVIDER_ID = _path_uuid("provider_id", "Provider profile ID.")
 
 JOB_NOT_FOUND = OpenApiResponse(description="Job not found.")
+# check_accepted_provider() returns 404 when the job has no accepted offer.
+JOB_OR_PROVIDER_NOT_FOUND = OpenApiResponse(
+    description="Job not found, or it has no accepted provider."
+)
 OFFER_NOT_FOUND = OpenApiResponse(description="Offer not found.")
 # The mixins raise ValidationError("message") with a bare string, which DRF
 # renders as a JSON ARRAY of messages, not {"detail": ...}. Explicit
 # Response/dict errors in the views use {"detail": "..."}.
 STATE_ERROR_NOTE = (
-    ' State errors (wrong job/offer status) are returned as a JSON array of '
+    " State errors (wrong job/offer status) are returned as a JSON array of "
     'messages, e.g. ["This job is not open."]; other failures use {"detail": "..."}.'
 )
 BAD_STATE = OpenApiResponse(
-    description="The job or offer is not in a state that allows this action." + STATE_ERROR_NOTE
+    description="The job or offer is not in a state that allows this action."
+    + STATE_ERROR_NOTE
 )
 NOT_ALLOWED = OpenApiResponse(
     response=JobsDetailResponseSerializer,
@@ -137,7 +158,6 @@ NOT_ALLOWED = OpenApiResponse(
 )
 
 # Create your views here.
-
 
 
 @extend_schema_view(
@@ -194,7 +214,10 @@ NOT_ALLOWED = OpenApiResponse(
         responses={
             200: JobRequestWriteSerializer,
             400: OpenApiResponse(
-                description=("Validation error, or the job can no longer be edited." + STATE_ERROR_NOTE)
+                description=(
+                    "Validation error, or the job can no longer be edited."
+                    + STATE_ERROR_NOTE
+                )
             ),
             401: UNAUTHORIZED,
             403: NOT_ALLOWED,
@@ -252,9 +275,11 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
             "category",
             "primary_location",
             "secondary_location",
+            "provider_rating",
         ).prefetch_related(
             "job_request_images",
             "job_completion_images",
+            "job_progress_updates",
             Prefetch(
                 "job_offers",
                 queryset=offer_queryset,
@@ -344,8 +369,7 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
 
         # Notify customer
         transaction.on_commit(
-            lambda: create_job_created_notification(
-                user=self.request.user, job=job)
+            lambda: create_job_created_notification(user=self.request.user, job=job)
         )
 
         logger.info(
@@ -384,8 +408,7 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
 
         # Notify customer of job update
         transaction.on_commit(
-            lambda: create_job_updated_notification(
-                user=self.request.user, job=job)
+            lambda: create_job_updated_notification(user=self.request.user, job=job)
         )
 
         logger.info(
@@ -448,7 +471,10 @@ class JobRequestViewSet(JobRequestMixin, viewsets.ModelViewSet):
     responses={
         201: JobRequestImageSerializer,
         400: OpenApiResponse(
-            description=("Validation error, image limit reached, or the job is not pending." + STATE_ERROR_NOTE)
+            description=(
+                "Validation error, image limit reached, or the job is not pending."
+                + STATE_ERROR_NOTE
+            )
         ),
         401: UNAUTHORIZED,
         403: NOT_ALLOWED,
@@ -592,10 +618,13 @@ class JobRequestImageDeleteView(JobRequestMixin, APIView):
         responses={
             201: JobRequestOfferSerializer,
             400: OpenApiResponse(
-                description=((
-                    "Validation error, job not accepting offers, deadline passed, "
-                    "or an offer already exists."
-                ) + STATE_ERROR_NOTE)
+                description=(
+                    (
+                        "Validation error, job not accepting offers, deadline passed, "
+                        "or an offer already exists."
+                    )
+                    + STATE_ERROR_NOTE
+                )
             ),
             401: UNAUTHORIZED,
             403: NOT_ALLOWED,
@@ -622,7 +651,7 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
         return [IsVerifiedProvider()]
 
     # get_queryset returns the appropriate queryset based on the request method and whether a specific job ID is provided in the URL.
-    # For GET requests without a job ID, only verified providers can access the endpoint. 
+    # For GET requests without a job ID, only verified providers can access the endpoint.
     # For GET requests with a job ID, the authenticated customer must own the job to access the offers.
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
@@ -669,8 +698,7 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
         )
 
         if job.deadline is not None and job.deadline <= timezone.now():
-            raise ValidationError(
-                {"detail": "This job's deadline has passed."})
+            raise ValidationError({"detail": "This job's deadline has passed."})
 
         provider = request.user.provider_profile
 
@@ -679,6 +707,7 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
             .filter(job=job, provider=provider)
             .first()
         )
+        reoffer = existing is not None and existing.status == JobOfferStatus.WITHDRAWN
 
         if existing is None:
             serializer = self.get_serializer(data=request.data)
@@ -699,8 +728,7 @@ class JobOfferView(JobRequestMixin, generics.ListCreateAPIView):
             )
 
         transaction.on_commit(
-            lambda: create_job_new_offer_notification(
-                user=job.customer.user, job=job)
+            lambda: create_job_new_offer_notification(user=job.customer.user, job=job)
         )
 
         logger.info(
@@ -732,10 +760,13 @@ class JobOfferAcceptView(JobRequestMixin, ProviderMixin, APIView):
         responses={
             200: _detail("Offer accepted."),
             400: OpenApiResponse(
-                description=((
-                    "Job not open, offer already processed, or the job's deadline "
-                    "has passed."
-                ) + STATE_ERROR_NOTE)
+                description=(
+                    (
+                        "Job not open, offer already processed, or the job's deadline "
+                        "has passed."
+                    )
+                    + STATE_ERROR_NOTE
+                )
             ),
             401: UNAUTHORIZED,
             403: NOT_ALLOWED,
@@ -765,14 +796,11 @@ class JobOfferAcceptView(JobRequestMixin, ProviderMixin, APIView):
         )
 
         self.check_job_owner(job)
-        self.ensure_job_is_open(
-            job, "Offers can only be managed while the job is open")
-        self.ensure_offer_is_pending(
-            offer, "This offer has already been processed.")
+        self.ensure_job_is_open(job, "Offers can only be managed while the job is open")
+        self.ensure_offer_is_pending(offer, "This offer has already been processed.")
 
         if job.deadline is not None and job.deadline <= timezone.now():
-            raise ValidationError(
-                {"detail": "This job's deadline has passed."})
+            raise ValidationError({"detail": "This job's deadline has passed."})
 
         # Offers about to be rejected (captured BEFORE the update).
         other_offers = list(
@@ -861,8 +889,7 @@ class JobOfferRejectView(JobRequestMixin, ProviderMixin, APIView):
         self.ensure_job_is_open(
             job, "You can only reject offers while the job is open."
         )
-        self.ensure_offer_is_pending(
-            offer, "This offer has already been processed.")
+        self.ensure_offer_is_pending(offer, "This offer has already been processed.")
 
         offer.status = JobOfferStatus.REJECTED
         offer.save(
@@ -927,10 +954,8 @@ class JobOfferWithdrawView(ProviderMixin, JobRequestMixin, APIView):
         )
 
         self.check_offer_owner(offer)
-        self.ensure_job_is_open(
-            job, "You can only withdraw offers from open jobs.")
-        self.ensure_offer_is_pending(
-            offer, "Only pending offers can be withdrawn.")
+        self.ensure_job_is_open(job, "You can only withdraw offers from open jobs.")
+        self.ensure_offer_is_pending(offer, "Only pending offers can be withdrawn.")
 
         # The post_save signal moves the job back to PENDING if this was the last pending offer.
         offer.status = JobOfferStatus.WITHDRAWN
@@ -958,7 +983,10 @@ class JobOfferWithdrawView(ProviderMixin, JobRequestMixin, APIView):
     responses={
         201: _detail("N completion image(s) uploaded successfully."),
         400: OpenApiResponse(
-            description=("No images, too many images, invalid image, or the job is not in progress." + STATE_ERROR_NOTE)
+            description=(
+                "No images, too many images, invalid image, or the job is not in progress."
+                + STATE_ERROR_NOTE
+            )
         ),
         401: UNAUTHORIZED,
         403: NOT_ALLOWED,
@@ -1047,17 +1075,21 @@ class JobRequestCompletionView(JobRequestMixin, ProviderMixin, APIView):
         summary="Request completion confirmation (accepted provider)",
         description=(
             "No request body. Requires at least one completion image and a job that "
-            "is in progress and not past its deadline."
+            "is in progress and not past its deadline. Also marks the job as "
+            "started if the provider never did."
         ),
         parameters=[JOB_ID],
         request=None,
         responses={
             200: _detail("Completion request sent successfully."),
             400: OpenApiResponse(
-                description=((
-                    "Job not in progress, no completion image uploaded, or the "
-                    "deadline has passed."
-                ) + STATE_ERROR_NOTE)
+                description=(
+                    (
+                        "Job not in progress, no completion image uploaded, or the "
+                        "deadline has passed."
+                    )
+                    + STATE_ERROR_NOTE
+                )
             ),
             401: UNAUTHORIZED,
             403: NOT_ALLOWED,
@@ -1074,11 +1106,13 @@ class JobRequestCompletionView(JobRequestMixin, ProviderMixin, APIView):
         )
         self.check_accepted_provider(job)
 
-        # After the deadline, Celery settles the job. 
-        # Without this check a provider could submit late and be paid in full instead of the partial percentage.
+        # After the deadline, expire_job moves in-progress jobs to disputed.
+        # Block late submissions so a provider can't skip that review.
         if job.deadline is not None and job.deadline <= timezone.now():
             raise ValidationError(
-                {"detail": "The deadline has passed. This job will be settled automatically."}
+                {
+                    "detail": "The deadline has passed. This job will be settled automatically."
+                }
             )
 
         # Ensure that at least one completion image has been uploaded before allowing the provider to request completion.
@@ -1094,7 +1128,12 @@ class JobRequestCompletionView(JobRequestMixin, ProviderMixin, APIView):
             )
 
         job.status = JobRequestStatus.AWAITING_CONFIRMATION
-        job.save(update_fields=["status", "updated_at"])
+        job.completion_requested_at = timezone.now()
+        update_fields = ["status", "completion_requested_at", "updated_at"]
+        if job.started_at is None:
+            job.started_at = timezone.now()
+            update_fields.append("started_at")
+        job.save(update_fields=update_fields)
 
         # Notify job owner of a completion request
         transaction.on_commit(
@@ -1114,6 +1153,134 @@ class JobRequestCompletionView(JobRequestMixin, ProviderMixin, APIView):
         )
 
 
+class JobStartView(JobRequestMixin, ProviderMixin, APIView):
+    permission_classes = [IsVerifiedProvider]
+    http_method_names = ["post"]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "job_progress"
+
+    @extend_schema(
+        tags=["Jobs"],
+        summary="Mark a job as started (accepted provider)",
+        description=(
+            "No request body. Records when work began. Only while the job is in "
+            "progress and before its deadline, and only once. The timestamp is shown "
+            "to admins as evidence if the job is later disputed."
+        ),
+        parameters=[JOB_ID],
+        request=None,
+        responses={
+            200: JobStartedResponseSerializer,
+            400: OpenApiResponse(
+                description=(
+                    "The job is not in progress, was already marked as started, "
+                    'or the deadline has passed (e.g. {"detail": "..."}).'
+                )
+            ),
+            401: UNAUTHORIZED,
+            403: NOT_ALLOWED,
+            404: JOB_OR_PROVIDER_NOT_FOUND,
+            429: THROTTLED,
+        },
+    )
+    @transaction.atomic
+    def post(self, request, *args, **kwargs):
+        job = self.get_locked_job()
+        self.check_accepted_provider(job)
+
+        if job.status != JobRequestStatus.IN_PROGRESS:
+            raise ValidationError({"detail": "Only jobs in progress can be started."})
+        if job.started_at is not None:
+            raise ValidationError({"detail": "This job is already marked as started."})
+        self.ensure_deadline_not_passed(job)
+
+        job.started_at = timezone.now()
+        job.save(update_fields=["started_at", "updated_at"])
+
+        logger.info("Job started user_id=%s job_id=%s", request.user.pk, job.pk)
+
+        return Response(
+            {"detail": "Job marked as started.", "started_at": job.started_at},
+            status=status.HTTP_200_OK,
+        )
+
+
+# (Decorator is on the class: spectacular reads the post handler, not create().)
+@extend_schema(
+    tags=["Jobs"],
+    summary="Post a progress update (accepted provider)",
+    description=(
+        "multipart/form-data or JSON with a `note` and/or an `image` (at least one). "
+        "Only while the job is in progress and before its deadline, up to a maximum "
+        "number of updates per job. Also marks the job as started if it wasn't "
+        "already. Updates are shown to the customer and to admins as evidence."
+    ),
+    parameters=[JOB_ID],
+    request=JobProgressUpdateSerializer,
+    responses={
+        201: JobProgressUpdateSerializer,
+        400: OpenApiResponse(
+            description=(
+                "Validation error (no note or image), the job is not in progress, "
+                "the deadline has passed, or the update limit was reached."
+            )
+        ),
+        401: UNAUTHORIZED,
+        403: NOT_ALLOWED,
+        404: JOB_OR_PROVIDER_NOT_FOUND,
+        429: THROTTLED,
+    },
+)
+class JobProgressUpdateCreateView(
+    JobRequestMixin, ProviderMixin, generics.CreateAPIView
+):
+    serializer_class = JobProgressUpdateSerializer
+    permission_classes = [IsVerifiedProvider]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    http_method_names = ["post"]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "job_progress"
+
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        job = self.get_locked_job()
+        offer = self.check_accepted_provider(job)
+
+        if job.status != JobRequestStatus.IN_PROGRESS:
+            raise ValidationError(
+                {"detail": "Progress can only be posted while the job is in progress."}
+            )
+        self.ensure_deadline_not_passed(job)
+
+        if job.job_progress_updates.count() >= MAX_JOB_PROGRESS_UPDATES:
+            raise ValidationError(
+                {
+                    "detail": (
+                        f"Maximum of {MAX_JOB_PROGRESS_UPDATES} progress updates "
+                        "allowed for this job."
+                    )
+                }
+            )
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(job=job, provider=offer.provider)
+
+        # Posting progress implies the work has begun.
+        if job.started_at is None:
+            job.started_at = timezone.now()
+            job.save(update_fields=["started_at", "updated_at"])
+
+        logger.info(
+            "Progress update posted user_id=%s job_id=%s update_id=%s",
+            request.user.pk,
+            job.pk,
+            serializer.instance.pk,
+        )
+
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
 class JobConfirmCompletionView(JobRequestMixin, APIView):
     permission_classes = [IsCustomer]
     http_method_names = ["patch"]
@@ -1124,15 +1291,18 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
         tags=["Jobs"],
         summary="Confirm completion and rate the provider (job owner)",
         description=(
-            "Records the rating, updates the provider's rating statistics and "
-            "releases payment to the provider."
+            "Records the optional rating, updates the provider's rating statistics "
+            "(if rated) and releases payment to the provider."
         ),
         parameters=[JOB_ID],
         request=JobConfirmCompletionSerializer,
         responses={
             200: JobCompletionConfirmedResponseSerializer,
             400: OpenApiResponse(
-                description=("Validation error, or the job is not awaiting confirmation." + STATE_ERROR_NOTE)
+                description=(
+                    "Validation error, or the job is not awaiting confirmation."
+                    + STATE_ERROR_NOTE
+                )
             ),
             401: UNAUTHORIZED,
             403: NOT_ALLOWED,
@@ -1151,7 +1321,7 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
 
         serializer = JobConfirmCompletionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        rating_value = serializer.validated_data["rating"]
+        rating_value = serializer.validated_data.get("rating")  # may be None
         comment = serializer.validated_data.get("comment", "")
 
         offer = get_object_or_404(
@@ -1160,41 +1330,18 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
             status=JobOfferStatus.ACCEPTED,
         )
 
-        # Lock the provider row so concurrent ratings can't overwrite each other's stats.
-        provider = (
-            ProviderProfile.objects.select_for_update(of=("self",))
-            .select_related("user")
-            .get(pk=offer.provider_id)
-        )
+        if rating_value is not None:
+            provider = create_provider_rating(
+                job, offer.provider_id, rating_value, comment
+            )
+        else:
+            provider = offer.provider
 
-        # Create the rating for this completed job.
-        ProviderRating.objects.create(
-            job=job,
-            provider=provider,
-            customer=job.customer,
-            rating=rating_value,
-            comment=comment,
+        # Always count the completed job, rated or not.
+        ProviderProfile.objects.filter(pk=provider.pk).update(
+            completed_jobs=F("completed_jobs") + 1,
+            updated_at=timezone.now(),
         )
-
-        # Recalculate the provider's average rating.
-        stats = ProviderRating.objects.filter(provider=provider).aggregate(
-            average=Avg("rating"), count=Count("id")
-        )
-
-        # Update provider rating statistics.
-        provider.average_rating = round(stats["average"] or 0, 2)
-        provider.ratings_count = stats["count"]
-        provider.completed_jobs = F("completed_jobs") + 1
-        provider.save(
-            update_fields=[
-                "average_rating",
-                "ratings_count",
-                "completed_jobs",
-                "updated_at",
-            ]
-        )
-        # completed_jobs is now an F() expression in memory. Call
-        # provider.refresh_from_db(fields=["completed_jobs"]) before reading it.
 
         # JobRequest.save() sets completed_at when the status becomes COMPLETED.
         job.status = JobRequestStatus.COMPLETED
@@ -1223,11 +1370,79 @@ class JobConfirmCompletionView(JobRequestMixin, APIView):
             {
                 "detail": "Job completed successfully.",
                 "rating": rating_value,
+                "comment": comment if rating_value is not None else "",
+                "provider_average_rating": float(provider.average_rating or 0),
+                "provider_ratings_count": provider.ratings_count,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+@extend_schema(
+    tags=["Ratings"],
+    summary="Rate the provider after completion or dispute resolution (job owner)",
+    description=(
+        "Allowed once the job is completed, or after an admin resolved its dispute "
+        "(refund, partial pay or release). One rating per job."
+    ),
+    parameters=[JOB_ID],
+    request=JobRatingSerializer,
+    responses={
+        201: JobCompletionConfirmedResponseSerializer,
+        400: OpenApiResponse(
+            description="Validation error, job not rateable yet, or already rated."
+            + STATE_ERROR_NOTE
+        ),
+        401: UNAUTHORIZED,
+        403: NOT_ALLOWED,
+        404: JOB_NOT_FOUND,
+        429: THROTTLED,
+    },
+)
+class JobRatingCreateView(JobRequestMixin, APIView):
+    permission_classes = [IsCustomer]
+    http_method_names = ["post"]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "job_completion"
+
+    @transaction.atomic
+    def post(self, request, *args, **kwargs):
+        job = self.get_locked_job()
+        self.check_job_owner(job)
+
+        if not job.is_ratable():
+            raise ValidationError(
+                "You can only rate after the job is completed or its dispute is resolved."
+            )
+        if ProviderRating.objects.filter(job=job).exists():
+            raise ValidationError({"detail": "You have already rated this job."})
+
+        serializer = JobRatingSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        rating_value = serializer.validated_data["rating"]
+        comment = serializer.validated_data.get("comment", "")
+
+        offer = get_object_or_404(
+            JobRequestOffer, job=job, status=JobOfferStatus.ACCEPTED
+        )
+        provider = create_provider_rating(job, offer.provider_id, rating_value, comment)
+
+        logger.info(
+            "Job rated user_id=%s job_id=%s provider_id=%s rating=%s",
+            request.user.pk,
+            job.pk,
+            provider.pk,
+            rating_value,
+        )
+        return Response(
+            {
+                "detail": "Rating submitted.",
+                "rating": rating_value,
                 "comment": comment,
                 "provider_average_rating": float(provider.average_rating),
                 "provider_ratings_count": provider.ratings_count,
             },
-            status=status.HTTP_200_OK,
+            status=status.HTTP_201_CREATED,
         )
 
 
@@ -1276,18 +1491,21 @@ class ProviderRatingsPublicListView(generics.ListAPIView):
     tags=["Disputes"],
     summary="Open a dispute on a job (job owner)",
     description=(
-        "Only while the job is awaiting confirmation and before its deadline. "
-        "Moves the job to disputed and notifies the provider and admins."
+        "While the job is in progress, or awaiting confirmation and before the "
+        "review window closes. `customer_reason` is required. Moves the job to disputed and "
+        "notifies the provider and admins. The job's points stay held until an "
+        "admin resolves the dispute."
     ),
     parameters=[JOB_ID],
     request=JobDisputeSerializer,
     responses={
         201: JobDisputeSerializer,
         400: OpenApiResponse(
-            description=((
-                "Validation error, job not awaiting confirmation, deadline passed, "
-                "or a dispute already exists."
-            ) + STATE_ERROR_NOTE)
+            description=(
+                "Validation error (e.g. missing reason), the job is not in "
+                "progress or awaiting confirmation, the review window closed while "
+                "awaiting confirmation, or a dispute already exists." + STATE_ERROR_NOTE
+            )
         ),
         401: UNAUTHORIZED,
         403: NOT_ALLOWED,
@@ -1302,21 +1520,25 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "disputes"
 
-    # create() handles the creation of a new dispute for a specific job.
-    # It ensures that the job is still awaiting confirmation before allowing the creation of a dispute.
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         job = self.get_locked_job()
 
         self.check_job_owner(job)
-        self.ensure_job_is_awaiting_confirmation(
-            job, "Only the jobs awaiting confirmation can be disputed."
+        self.ensure_job_is_awaiting_confirmation_or_in_progress(
+            job,
+            "Only jobs that are in progress or awaiting confirmation can be disputed.",
         )
 
-        if job.deadline is not None and job.deadline <= timezone.now():
+        # The deadline only blocks disputes after the review window.
+        if (
+            job.status == JobRequestStatus.AWAITING_CONFIRMATION
+            and job.auto_release_at is not None
+            and job.auto_release_at <= timezone.now()
+        ):
             return Response(
                 {
-                    "detail": "The deadline has passed. This job will be settled automatically."
+                    "detail": "The review period has ended. This job will be settled automatically."
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -1327,7 +1549,6 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
             status=JobOfferStatus.ACCEPTED,
         )
 
-        # Check if a dispute already exists for this job.
         if JobDispute.objects.filter(job=job).exists():
             return Response(
                 {"detail": "A dispute already exists for this job."},
@@ -1336,28 +1557,13 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save(job=job)
+        serializer.save(job=job, source=DisputeSource.CUSTOMER)
 
-        # Mark the job as disputed.
         job.status = JobRequestStatus.DISPUTED
         job.save(update_fields=["status", "updated_at"])
 
-        # Notify the provider after the transaction commits.
-        provider_user = accepted_offer.provider.user
-        transaction.on_commit(
-            lambda: create_dispute_opened_notification(
-                user=provider_user, job=job)
-        )
-
-        # Notify administrators after the transaction commits.
-        admin_users = list(User.objects.filter(
-            role=UserRole.ADMIN, is_active=True))
-        for admin in admin_users:
-            transaction.on_commit(
-                lambda user=admin: create_dispute_opened_admin_notification(
-                    user=user, job=job
-                )
-            )
+        # Notify the provider and admins after the transaction commits.
+        notify_dispute_opened(job, accepted_offer.provider.user)
 
         logger.info(
             "Dispute opened user_id=%s job_id=%s dispute_id=%s",
@@ -1366,26 +1572,32 @@ class JobDisputeCreateView(JobRequestMixin, generics.CreateAPIView):
             serializer.instance.pk,
         )
 
-        return Response(
-            serializer.data,
-            status=status.HTTP_201_CREATED,
-        )
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 @extend_schema(
     tags=["Disputes"],
-    summary="Get a dispute (job owner or admin)",
+    summary="Get a dispute (job owner, accepted provider or admin)",
+    description=(
+        "Customers can only read disputes on their own jobs. Providers can only "
+        "read disputes on jobs they were accepted for. Includes the customer's "
+        "reason (or the system reason if opened at the deadline), the provider's "
+        "response, and the admin's decision once resolved."
+    ),
+    parameters=[DISPUTE_ID],
     responses={
         200: JobDisputeSerializer,
         401: UNAUTHORIZED,
         403: NOT_ALLOWED,
-        404: OpenApiResponse(description="Dispute not found."),
+        404: OpenApiResponse(
+            description="Dispute not found, or (for providers) its job has no accepted provider."
+        ),
         429: THROTTLED,
     },
 )
-class JobDisputeDetailView(JobRequestMixin, generics.RetrieveAPIView):
+class JobDisputeDetailView(JobRequestMixin, ProviderMixin, generics.RetrieveAPIView):
     serializer_class = JobDisputeSerializer
-    permission_classes = [IsCustomer | IsAdminUser]
+    permission_classes = [IsCustomer | IsVerifiedProvider | IsAdminUser]
     throttle_classes = [UserRateThrottle]
     queryset = JobDispute.objects.select_related(
         "job",
@@ -1394,13 +1606,94 @@ class JobDisputeDetailView(JobRequestMixin, generics.RetrieveAPIView):
 
     def get_object(self):
         dispute = super().get_object()
+        user = self.request.user
 
-        if self.request.user.is_staff:
+        if user.is_staff:
             return dispute
 
-        self.check_dispute_owner(dispute)
+        if hasattr(user, "customer_profile"):
+            self.check_dispute_owner(dispute)
+        else:
+            self.check_accepted_provider(dispute.job)
 
         return dispute
+
+
+class ProviderRespondDisputeView(
+    JobRequestMixin, ProviderMixin, generics.UpdateAPIView
+):
+    serializer_class = ProviderDisputeResponseSerializer
+    permission_classes = [IsVerifiedProvider]
+    http_method_names = ["patch"]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "disputes"
+
+    def get_queryset(self):
+        return JobDispute.objects.select_for_update(of=("self", "job")).select_related(
+            "job"
+        )
+
+    @extend_schema(
+        tags=["Disputes"],
+        summary="Respond to a dispute (accepted provider)",
+        description=(
+            "Gives the provider's side of an unresolved dispute. One response per "
+            "dispute. Admins are notified. Only the provider accepted for the "
+            "job can respond."
+        ),
+        parameters=[DISPUTE_ID],
+        request=ProviderDisputeResponseSerializer,
+        responses={
+            200: ProviderDisputeResponseSerializer,
+            400: OpenApiResponse(
+                description=(
+                    "Validation error (missing response), the dispute is already "
+                    "resolved, the job is not disputed, or you already responded."
+                )
+            ),
+            401: UNAUTHORIZED,
+            403: NOT_ALLOWED,
+            404: OpenApiResponse(
+                description="Dispute not found, or its job has no accepted provider."
+            ),
+            429: THROTTLED,
+        },
+    )
+    @transaction.atomic
+    def patch(self, request, *args, **kwargs):
+        dispute = self.get_object()
+        job = dispute.job
+
+        self.check_accepted_provider(job)
+        if dispute.decision:
+            raise ValidationError({"detail": "This dispute has already been resolved."})
+        if job.status != JobRequestStatus.DISPUTED:
+            raise ValidationError({"detail": "This job is not in a disputed state."})
+        if dispute.provider_response:
+            raise ValidationError(
+                {"detail": "You have already responded to this dispute."}
+            )
+
+        serializer = self.get_serializer(dispute, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(provider_responded_at=timezone.now())
+
+        admin_users = list(User.objects.filter(role=UserRole.ADMIN, is_active=True))
+        for admin in admin_users:
+            transaction.on_commit(
+                lambda user=admin: create_dispute_response_admin_notification(
+                    user=user, job=job
+                )
+            )
+
+        logger.info(
+            "Dispute response submitted user_id=%s dispute_id=%s job_id=%s",
+            request.user.pk,
+            dispute.pk,
+            job.pk,
+        )
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
@@ -1419,17 +1712,25 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
         tags=["Disputes"],
         summary="Resolve a dispute (admin)",
         description=(
-            "`decision` is required: `refund_points` cancels the job and refunds the "
-            "customer; `release_points` completes the job and pays the provider."
+            "`decision` is required. `refund_points` cancels the job and refunds "
+            "the customer in full. `release_points` completes the job and pays the "
+            "provider in full. `partial_pay` cancels the job, pays the provider "
+            "`provider_percentage`% of the job points (1-99, before the platform "
+            "fee) and refunds the rest to the customer. `provider_percentage` is "
+            "required with `partial_pay` and rejected with any other decision. "
+            "Works for disputes opened by the customer and for those opened "
+            "automatically at the deadline."
         ),
+        parameters=[DISPUTE_ID],
         request=AdminJobDisputeSerializer,
         responses={
             200: AdminJobDisputeSerializer,
             400: OpenApiResponse(
-                description=((
-                    "Validation error, missing/invalid decision, dispute already "
-                    "resolved, or the job is not disputed."
-                ) + STATE_ERROR_NOTE)
+                description=(
+                    "Validation error, missing/invalid decision, missing or "
+                    "misplaced `provider_percentage`, dispute already resolved, "
+                    "or the job is not disputed." + STATE_ERROR_NOTE
+                )
             ),
             401: UNAUTHORIZED,
             403: NOT_ALLOWED,
@@ -1444,20 +1745,18 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
 
         job = dispute.job
         if job.status != JobRequestStatus.DISPUTED:
-            raise ValidationError(
-                {"detail": "This job is not in a disputed state."})
+            raise ValidationError({"detail": "This job is not in a disputed state."})
 
-        serializer = self.get_serializer(
-            dispute, data=request.data, partial=True)
+        serializer = self.get_serializer(dispute, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
 
         decision = serializer.validated_data.get("decision")
         if decision not in (
             JobDisputeDecision.REFUND_POINTS,
             JobDisputeDecision.RELEASE_POINTS,
+            JobDisputeDecision.PARTIAL_PAY,
         ):
-            raise ValidationError(
-                {"decision": "A valid decision is required."})
+            raise ValidationError({"decision": "A valid decision is required."})
 
         offer = get_object_or_404(
             JobRequestOffer.objects.select_related("provider__user"),
@@ -1472,8 +1771,7 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
 
         if decision == JobDisputeDecision.REFUND_POINTS:
             job.status = JobRequestStatus.CANCELLED
-            release_reserved_points(
-                job, transaction_type=TransactionType.REFUND)
+            release_reserved_points(job, transaction_type=TransactionType.REFUND)
 
             transaction.on_commit(
                 lambda: create_dispute_refunded_customer_notification(
@@ -1485,6 +1783,24 @@ class AdminResolveDisputeView(JobRequestMixin, generics.UpdateAPIView):
                     user=provider_user, job=job
                 )
             )
+
+        elif decision == JobDisputeDecision.PARTIAL_PAY:
+            percentage = dispute.provider_percentage  # validated by the serializer
+            pay_provider_partial(job, offer, percentage)
+            job.status = JobRequestStatus.CANCELLED  # partial work: job is closed
+            # completed_jobs is intentionally NOT incremented.
+
+            transaction.on_commit(
+                lambda: create_dispute_partial_customer_notification(
+                    user=customer_user, job=job, percentage=percentage
+                )
+            )
+            transaction.on_commit(
+                lambda: create_dispute_partial_provider_notification(
+                    user=provider_user, job=job, percentage=percentage
+                )
+            )
+
         else:  # RELEASE_POINTS
             job.status = JobRequestStatus.COMPLETED
             job.completed_at = timezone.now()

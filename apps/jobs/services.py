@@ -1,20 +1,25 @@
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Avg, Count
 from django.utils import timezone
 
-from apps.core.choices import TransactionType, JobRequestStatus, JobOfferStatus
-from apps.core.constants import JOB_IN_PROGRESS_PROVIDER_PERCENT
+from apps.core.choices import (
+    DisputeSource,
+    TransactionType,
+    JobRequestStatus,
+    JobOfferStatus,
+)
 
-from apps.jobs.models import JobRequest, JobRequestOffer
+from apps.providers.models import ProviderProfile
+
+from apps.jobs.models import JobDispute, JobRequest, JobRequestOffer, ProviderRating
 from apps.jobs.notifications import (
     create_job_cancelled_notification,
-    create_job_cancelled_provider_partial_pay_notification,
     create_job_completed_by_deadline_notification,
+    notify_dispute_opened,
 )
 
 from apps.konnett_points.utils import (
     pay_provider,
-    pay_provider_partial,
     release_reserved_points,
 )
 
@@ -24,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 @transaction.atomic
-def expire_job(job, in_progress_percentage=JOB_IN_PROGRESS_PROVIDER_PERCENT):
+def expire_job(job):
     """
     Automatically handle a job that has reached its deadline.
 
@@ -37,11 +42,13 @@ def expire_job(job, in_progress_percentage=JOB_IN_PROGRESS_PROVIDER_PERCENT):
         Cancel + refund customer 100%.
 
     IN_PROGRESS:
-        Cancel + pay provider a percentage of the job points.
-        Refund the remaining points to customer.
+        Move to DISPUTED (source=system_deadline). Nobody is paid until
+        an admin resolves it.
 
     AWAITING_CONFIRMATION:
-        Cancel + pay provider in full.
+        Once the deadline AND the review window (REVIEW_WINDOW_HOURS after the
+        completion request) have both passed: mark COMPLETED and pay the
+        provider in full.
 
     DISPUTED:
         Do nothing. Admin must resolve it.
@@ -65,7 +72,17 @@ def expire_job(job, in_progress_percentage=JOB_IN_PROGRESS_PROVIDER_PERCENT):
         .get(pk=job.pk)
     )
 
-    if job.deadline is None or job.deadline > timezone.now():
+    if job.deadline is None:
+        return False
+
+    # Delivered jobs get the full review window, even if the provider
+    # requested completion just before the deadline.
+    if job.status == JobRequestStatus.AWAITING_CONFIRMATION:
+        due_at = job.auto_release_at
+    else:
+        due_at = job.deadline
+
+    if due_at > timezone.now():
         return False
 
     # --------------------------------------------------
@@ -94,14 +111,17 @@ def expire_job(job, in_progress_percentage=JOB_IN_PROGRESS_PROVIDER_PERCENT):
 
         release_reserved_points(job, transaction_type=TransactionType.REFUND)
 
-        JobRequestOffer.objects.filter(
-            pk__in=[o.pk for o in pending_offers]
-        ).update(status=JobOfferStatus.REJECTED)
+        JobRequestOffer.objects.filter(pk__in=[o.pk for o in pending_offers]).update(
+            status=JobOfferStatus.REJECTED
+        )
 
         users = [job.customer.user] + [o.provider.user for o in pending_offers]
         transaction.on_commit(
             lambda: create_job_cancelled_notification(
-                users=users, job=job, robust=True,)
+                users=users,
+                job=job,
+                robust=True,
+            )
         )
         return True
 
@@ -130,33 +150,37 @@ def expire_job(job, in_progress_percentage=JOB_IN_PROGRESS_PROVIDER_PERCENT):
     # Never automatically pay a provider if there is
     # no accepted offer.
     if accepted_offer is None:
-        logger.error("Job %s is %s but has no accepted offer.",
-                     job.pk, job.status)
+        logger.error("Job %s is %s but has no accepted offer.", job.pk, job.status)
         return False
 
     provider = accepted_offer.provider
     users = [job.customer.user, provider.user]
 
     # --------------------------------------------------
-    # IN PROGRESS: partial pay + refund the rest
+    # IN PROGRESS: open a system dispute for admin review
     # --------------------------------------------------
     if job.status == JobRequestStatus.IN_PROGRESS:
+        updates_count = job.job_progress_updates.count()
 
-        pay_provider_partial(
+        JobDispute.objects.get_or_create(
             job=job,
-            accepted_offer=accepted_offer,
-            percentage=in_progress_percentage,
+            defaults={
+                "source": DisputeSource.SYSTEM_DEADLINE,
+                "system_reason": (
+                    "Deadline reached while the job was still in progress. "
+                    f"Provider marked started: {'yes' if job.started_at else 'no'}. "
+                    f"Progress updates submitted: {updates_count}."
+                ),
+            },
         )
 
-        job.status = JobRequestStatus.CANCELLED
+        job.status = JobRequestStatus.DISPUTED
         job.save(update_fields=["status", "updated_at"])
 
-        # Notify the customer and provider of the changes
-        transaction.on_commit(
-            lambda: create_job_cancelled_provider_partial_pay_notification(
-                users=users, job=job, robust=True,
-            )
-        )
+        # Notify the provider, the customer and the admins.
+        notify_dispute_opened(job, provider.user, system=True)
+
+        logger.info("Job %s moved to disputed at deadline.", job.pk)
 
         return True
 
@@ -178,7 +202,33 @@ def expire_job(job, in_progress_percentage=JOB_IN_PROGRESS_PROVIDER_PERCENT):
     # Notify the customer and provider of the changes
     transaction.on_commit(
         lambda: create_job_completed_by_deadline_notification(
-            users=users, job=job, robust=True,)
+            users=users,
+            job=job,
+            robust=True,
+        )
     )
 
     return True
+
+
+def create_provider_rating(job, provider_id, rating, comment):
+    """Call inside transaction.atomic. Locks the provider row to protect stats."""
+    provider = (
+        ProviderProfile.objects.select_for_update(of=("self",))
+        .select_related("user")
+        .get(pk=provider_id)
+    )
+    ProviderRating.objects.create(
+        job=job,
+        provider=provider,
+        customer=job.customer,
+        rating=rating,
+        comment=comment,
+    )
+    stats = ProviderRating.objects.filter(provider=provider).aggregate(
+        average=Avg("rating"), count=Count("id")
+    )
+    provider.average_rating = round(stats["average"] or 0, 2)
+    provider.ratings_count = stats["count"]
+    provider.save(update_fields=["average_rating", "ratings_count", "updated_at"])
+    return provider
