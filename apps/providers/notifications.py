@@ -71,4 +71,7 @@ def queue_provider_verification_email(verification, status, admin_comment=None):
         },
     )
 
-    transaction.on_commit(lambda: process_email_outbox.delay(email.pk))
+    transaction.on_commit(
+        lambda: process_email_outbox.delay(email.pk),
+        robust=True,
+    )

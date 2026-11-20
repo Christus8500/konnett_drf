@@ -24,9 +24,15 @@ class CustomerProfile(UUIDModel, TimeStampedModel):
         on_delete=models.CASCADE,
         related_name="customer_profile",
     )
-    address = models.TextField(blank=True, default="")
-    city = models.CharField(max_length=100, blank=True, default="")
-    state = models.CharField(max_length=100, blank=True, default="")
+
+    address = models.ForeignKey(
+        "core.Address",
+        on_delete=models.SET_NULL,
+        related_name="customer_profile",
+        null=True,
+        blank=True,
+    )
+
     profile_image = models.ImageField(
         upload_to=profile_image_upload,
         blank=True,

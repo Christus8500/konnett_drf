@@ -157,7 +157,8 @@ def expire_job(job):
     users = [job.customer.user, provider.user]
 
     # --------------------------------------------------
-    # IN PROGRESS: open a system dispute for admin review
+    # IN PROGRESS: open a system dispute. Nobody is paid;
+    # an admin decides using the evidence collected.
     # --------------------------------------------------
     if job.status == JobRequestStatus.IN_PROGRESS:
         updates_count = job.job_progress_updates.count()
@@ -215,7 +216,7 @@ def create_provider_rating(job, provider_id, rating, comment):
     """Call inside transaction.atomic. Locks the provider row to protect stats."""
     provider = (
         ProviderProfile.objects.select_for_update(of=("self",))
-        .select_related("user")
+        .select_related("user", "address")
         .get(pk=provider_id)
     )
     ProviderRating.objects.create(

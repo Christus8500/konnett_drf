@@ -58,7 +58,7 @@ class CustomerProfileView(generics.RetrieveUpdateAPIView):
     http_method_names = ["get", "patch"]
 
     def get_queryset(self):
-        return CustomerProfile.objects.select_related("user")
+        return CustomerProfile.objects.select_related("user", "address").filter(user=self.request.user)
 
     def get_object(self):
         obj = get_object_or_404(self.get_queryset(), user=self.request.user)

@@ -25,7 +25,14 @@ from drf_spectacular.utils import (
     extend_schema_view,
 )
 
-from apps.core.utils import FORBIDDEN, THROTTLED, UNAUTHORIZED, VALIDATION_ERROR, get_cache, set_cache
+from apps.core.utils import (
+    FORBIDDEN,
+    THROTTLED,
+    UNAUTHORIZED,
+    VALIDATION_ERROR,
+    get_cache,
+    set_cache,
+)
 
 from apps.accounts.serializers import (
     ErrorResponseSerializer,
@@ -51,7 +58,9 @@ logger = logging.getLogger(__name__)
 def _client_ip(request):
     # PythonAnywhere's load balancer puts the real client IP in X-Real-IP.
     # Falls back to REMOTE_ADDR for local development.
-    return request.META.get("HTTP_X_REAL_IP") or request.META.get("REMOTE_ADDR", "unknown")
+    return request.META.get("HTTP_X_REAL_IP") or request.META.get(
+        "REMOTE_ADDR", "unknown"
+    )
 
 
 # Create your views here.
@@ -66,7 +75,8 @@ def _queue_password_reset(user):
         payload={"user_id": str(user.pk)},
     )
     transaction.on_commit(
-        lambda email_id=outbox_email.pk: process_email_outbox.delay(email_id)
+        lambda email_id=outbox_email.pk: process_email_outbox.delay(email_id),
+        robust=True,
     )
 
 
@@ -125,8 +135,7 @@ class UserViewSet(
         queryset = self.get_queryset()
         serializer = self.get_serializer(queryset, many=True)
 
-        set_cache(cache_key, serializer.data,
-                  timeout=settings.BIG_CACHE_TIMEOUT)
+        set_cache(cache_key, serializer.data, timeout=settings.BIG_CACHE_TIMEOUT)
 
         return Response(serializer.data)
 
@@ -186,7 +195,8 @@ class RegisterView(generics.CreateAPIView):
         )
 
         transaction.on_commit(
-            lambda email_id=email.pk: process_email_outbox.delay(email_id)
+            lambda email_id=email.pk: process_email_outbox.delay(email_id),
+            robust=True,
         )
         transaction.on_commit(
             lambda: logger.info(
@@ -219,7 +229,9 @@ class LoginView(APIView):
         request=LoginSerializer,
         responses={
             200: LoginResponseSerializer,
-            400: OpenApiResponse(description="Invalid credentials or malformed request."),
+            400: OpenApiResponse(
+                description="Invalid credentials or malformed request."
+            ),
         },
     )
     def post(self, request):
@@ -522,8 +534,7 @@ class EmailChangeRequestView(APIView):
         new_email = serializer.validated_data["new_email"]
 
         bucket = int(time.time() // 300)
-        email_hash = hashlib.sha256(
-            new_email.lower().encode()).hexdigest()[:16]
+        email_hash = hashlib.sha256(new_email.lower().encode()).hexdigest()[:16]
         key_suffix = f"{user.pk}:{email_hash}:{bucket}"
 
         with transaction.atomic():
@@ -541,7 +552,8 @@ class EmailChangeRequestView(APIView):
             )
             for mail_obj in (confirm_mail, notice_mail):
                 transaction.on_commit(
-                    lambda eid=mail_obj.pk: process_email_outbox.delay(eid)
+                    lambda eid=mail_obj.pk: process_email_outbox.delay(eid),
+                    robust=True,
                 )
 
         # Only the hash of the new address is logged, never the address itself.
@@ -577,7 +589,7 @@ class EmailChangeConfirmView(APIView):
             400: OpenApiResponse(
                 description=(
                     "Invalid/expired token (field errors), or the email is "
-                    "already taken (`{\"error\": \"Email already exists.\"}`)."
+                    'already taken (`{"error": "Email already exists."}`).'
                 )
             ),
             429: THROTTLED,

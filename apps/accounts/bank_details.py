@@ -69,8 +69,7 @@ def apply_user_update(user, user_data):
     update_fields = list(user_data)
 
     starts_cooldown = bool(changed) and (
-        had_complete_details
-        or getattr(settings, "BANK_COOLDOWN_ON_FIRST_SETUP", False)
+        had_complete_details or getattr(settings, "BANK_COOLDOWN_ON_FIRST_SETUP", False)
     )
     if starts_cooldown:
         user.bank_details_changed_at = timezone.now()
@@ -92,7 +91,9 @@ def apply_user_update(user, user_data):
             email_type="bank_details_changed",
             payload={"user_id": str(user.pk)},  # no account data in the payload
         )
-        transaction.on_commit(lambda eid=email.pk: process_email_outbox.delay(eid))
+        transaction.on_commit(
+            lambda eid=email.pk: process_email_outbox.delay(eid), robust=True
+        )
 
     return changed
 

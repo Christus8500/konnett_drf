@@ -1,39 +1,28 @@
-from django.db import transaction
 from django.core.validators import FileExtensionValidator
 from django.utils import timezone
 
 from rest_framework import serializers
 
-from apps.accounts.bank_details import BankDetailsPasswordMixin, apply_user_update
+from apps.accounts.bank_details import BankDetailsPasswordMixin
+from apps.accounts.serializers import (
+    USER_FIELDS,
+    UserFieldsSerializer,
+    ProfileUpdateMixin,
+)
 
 from apps.providers.models import ProviderProfile, ProviderVerification
 
 from apps.core.validators import validate_file_size, validate_image
-from apps.core.models import Address
 from apps.core.choices import ProviderVerificationStatus
 
 
 # Serializer for the ProviderProfile model, handling serialization and deserialization of provider profile data.
-class ProviderProfileSerializer(BankDetailsPasswordMixin, serializers.ModelSerializer):
-    user_id = serializers.UUIDField(source="user.id", read_only=True)
-    email = serializers.EmailField(source="user.email", read_only=True)
-    email_verified = serializers.BooleanField(
-        source="user.email_verified", read_only=True)
-    current_password = serializers.CharField(
-        write_only=True, required=False, style={"input_type": "password"}
-    )
-    phone_number = serializers.CharField(
-        source="user.phone_number", required=False)
-    first_name = serializers.CharField(
-        source="user.first_name", required=False)
-    last_name = serializers.CharField(source="user.last_name", required=False)
-
-    account_number = serializers.CharField(
-        source="user.account_number", required=False)
-    account_name = serializers.CharField(
-        source="user.account_name", required=False)
-    bank_name = serializers.CharField(source="user.bank_name", required=False)
-
+class ProviderProfileSerializer(
+    BankDetailsPasswordMixin,
+    ProfileUpdateMixin,
+    UserFieldsSerializer,
+    serializers.ModelSerializer,
+):
     profile_image = serializers.ImageField(
         validators=[validate_image],
         required=False,
@@ -70,15 +59,7 @@ class ProviderProfileSerializer(BankDetailsPasswordMixin, serializers.ModelSeria
         model = ProviderProfile
         fields = [
             "id",
-            "user_id",
-            "first_name",
-            "last_name",
-            "email",
-            "email_verified",
-            "phone_number",
-            "account_number",
-            "account_name",
-            "bank_name",
+            *USER_FIELDS,
             "business_name",
             "is_available",
             "bio",
@@ -108,8 +89,7 @@ class ProviderProfileSerializer(BankDetailsPasswordMixin, serializers.ModelSeria
 
     def validate_years_of_experience(self, value):
         if value < 0:
-            raise serializers.ValidationError(
-                "Years of experience cannot be negative.")
+            raise serializers.ValidationError("Years of experience cannot be negative.")
         return value
 
     # Validation method to ensure that the business name is unique across all provider profiles, excluding the current instance being updated.
@@ -127,46 +107,12 @@ class ProviderProfileSerializer(BankDetailsPasswordMixin, serializers.ModelSeria
 
         return value
 
-    # Overriding the serializer update method
-    # So the serializer will know how to update the values on the "User" and "Address" table
-    @transaction.atomic
-    def update(self, instance, validated_data):
-        user_data = validated_data.pop("user", {})
-        address_data = validated_data.pop("address", {})
-
-        # Update user fields
-        apply_user_update(instance.user, user_data)
-
-        # Create or update provider address
-        if address_data:
-            if instance.address:
-                address = instance.address
-
-                for attr, value in address_data.items():
-                    setattr(address, attr, value)
-
-                address.save()
-            else:
-                address = Address.objects.create(**address_data)
-
-                instance.address = address
-
-        # Update provider profile fields
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-
-        instance.save()
-
-        return instance
-
 
 # Serializer for the ProviderVerification model, handling serialization and deserialization of provider verification data.
 class ProviderVerificationSerializer(serializers.ModelSerializer):
     provider_id = serializers.UUIDField(read_only=True)
-    provider_name = serializers.CharField(
-        source="provider.full_name", read_only=True)
-    provider_email = serializers.CharField(
-        source="provider.user.email", read_only=True)
+    provider_name = serializers.CharField(source="provider.full_name", read_only=True)
+    provider_email = serializers.CharField(source="provider.user.email", read_only=True)
     selfie_image = serializers.ImageField(
         validators=[
             validate_image,
@@ -201,8 +147,7 @@ class ProviderVerificationSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         if instance.status == ProviderVerificationStatus.VERIFIED:
-            raise serializers.ValidationError(
-                "Verification has already been approved.")
+            raise serializers.ValidationError("Verification has already been approved.")
 
         # Only treat the request as a (re)submission if a file was actually uploaded
         if "id_document" in validated_data or "selfie_image" in validated_data:

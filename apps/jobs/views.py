@@ -1,7 +1,7 @@
 import logging
 
 from django.db import transaction
-from django.db.models import F, Q, Count, Prefetch, Avg
+from django.db.models import F, Q, Prefetch
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 

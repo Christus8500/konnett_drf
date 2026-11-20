@@ -1,6 +1,7 @@
 from django.contrib.auth import authenticate
 from django.core import signing
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 
@@ -11,14 +12,16 @@ from rest_framework_simplejwt.token_blacklist.models import (
     BlacklistedToken,
 )
 
-from apps.core.choices import UserRole
-
-from apps.accounts.models import User
+from apps.accounts.models import User, account_number_validator, phone_validator
 from apps.accounts.tokens import (
     password_reset_token_generator,
     read_email_change_token,
 )
+from apps.accounts.bank_details import apply_user_update
 from apps.accounts.validators import validate_password
+
+from apps.core.choices import UserRole
+from apps.core.models import Address
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -129,6 +132,108 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class UserFieldsSerializer(serializers.Serializer):
+    """
+    Declares the User-backed fields shared by the customer and provider profile
+    serializers. Never used on its own, only as a base class.
+    """
+
+    user_id = serializers.UUIDField(source="user.id", read_only=True)
+    email = serializers.EmailField(source="user.email", read_only=True)
+    email_verified = serializers.BooleanField(
+        source="user.email_verified", read_only=True
+    )
+    current_password = serializers.CharField(
+        write_only=True, required=False, style={"input_type": "password"}
+    )
+
+    first_name = serializers.CharField(
+        source="user.first_name", required=False, max_length=100
+    )
+    last_name = serializers.CharField(
+        source="user.last_name", required=False, max_length=100
+    )
+    phone_number = serializers.CharField(
+        source="user.phone_number",
+        required=False,
+        allow_blank=True,
+        max_length=20,
+        validators=[phone_validator],
+    )
+
+    account_number = serializers.CharField(
+        source="user.account_number",
+        required=False,
+        max_length=10,
+        validators=[account_number_validator],
+    )
+    account_name = serializers.CharField(
+        source="user.account_name", required=False, max_length=255
+    )
+    bank_name = serializers.CharField(
+        source="user.bank_name", required=False, max_length=255
+    )
+
+
+class ProfileUpdateMixin:
+    """
+    update() for profile serializers whose Meta.fields include user-backed fields
+    (source="user.*") and address fields (source="address.*").
+    """
+
+    address_required_fields = ("address", "city", "state")
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        user_data = validated_data.pop("user", {})
+        address_data = validated_data.pop("address", {})
+
+        # Address first: it can raise, and we don't want apply_user_update to log
+        # a bank change that then gets rolled back.
+        if address_data:
+            self._save_address(instance, address_data)
+
+        apply_user_update(instance.user, user_data)
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
+
+    def _save_address(self, instance, address_data):
+        if instance.address:
+            address = instance.address
+            for attr, value in address_data.items():
+                setattr(address, attr, value)
+            address.save()
+            return
+
+        missing = set(self.address_required_fields) - address_data.keys()
+        if missing:
+            raise serializers.ValidationError(
+                {f: "This field is required when adding an address." for f in missing}
+            )
+        instance.address = Address.objects.create(**address_data)
+
+
+# Splice this into Meta.fields so the list lives in one place too.
+USER_FIELDS = [
+    "user_id",
+    "first_name",
+    "last_name",
+    "email",
+    "email_verified",
+    "phone_number",
+    "account_number",
+    "account_name",
+    "bank_name",
+    "current_password",
+]
+
+
+
+
+
 class LoginResponseSerializer(serializers.Serializer):
     refresh = serializers.CharField()
     access = serializers.CharField()
@@ -196,8 +301,7 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 # ---------- Email change ----------
 class EmailChangeRequestSerializer(serializers.Serializer):
     new_email = serializers.EmailField()
-    password = serializers.CharField(
-        write_only=True, style={"input_type": "password"})
+    password = serializers.CharField(write_only=True, style={"input_type": "password"})
 
     def validate(self, attrs):
         user = self.context["request"].user
@@ -205,15 +309,13 @@ class EmailChangeRequestSerializer(serializers.Serializer):
         new_email = User.objects.normalize_email(attrs["new_email"].strip())
 
         if not user.check_password(attrs["password"]):
-            raise serializers.ValidationError(
-                {"password": "Incorrect password."})
+            raise serializers.ValidationError({"password": "Incorrect password."})
         if new_email.lower() == user.email.lower():
             raise serializers.ValidationError(
                 {"new_email": "This is already your email."}
             )
         if User.objects.filter(email__iexact=new_email).exists():
-            raise serializers.ValidationError(
-                {"new_email": "Email already exists."})
+            raise serializers.ValidationError({"new_email": "Email already exists."})
 
         attrs["new_email"] = new_email
         return attrs
